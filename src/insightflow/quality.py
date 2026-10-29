@@ -14,3 +14,11 @@ def count_duplicate_rows(df: pd.DataFrame) -> int:
     The first copy counts as the original, so 3 identical rows give 2.
     """
     return int(df.duplicated().sum())
+def count_duplicate_keys(df: pd.DataFrame, key_column: str) -> int:
+    """Return how many rows reuse a key value that appeared earlier.
+
+    Raises ValueError if key_column is not in the DataFrame.
+    """
+    if key_column not in df.columns:
+        raise ValueError(f"Column '{key_column}' not found in dataset")
+    return int(df[key_column].duplicated().sum())
