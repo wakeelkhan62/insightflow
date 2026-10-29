@@ -7,7 +7,9 @@ authors = [
     { name = "Wakeel Ahmad", email = "157325160+wakeelkhan62@users.noreply.github.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pandas>=3.1.0",
+]
 
 
 [build-system]
@@ -19,3 +21,9 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
