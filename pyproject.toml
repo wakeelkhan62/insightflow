@@ -1,25 +1,21 @@
 [project]
 name = "insightflow"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI-powered business analytics platform"
 readme = "README.md"
 authors = [
     { name = "Wakeel Ahmad", email = "157325160+wakeelkhan62@users.noreply.github.com" }
 ]
 requires-python = ">=3.13"
-dependencies = [
-    "fastapi[standard]>=0.162.0",
-    "pandas>=3.1.0",
-]
+dependencies = []
 
-[project.scripts]
-insightflow = "insightflow:main"
 
 [build-system]
 requires = ["uv_build>=0.12.23,<0.13.0"]
 build-backend = "uv_build"
+[tool.ruff]
+line-length = 88
+target-version = "py313"
 
-[dependency-groups]
-dev = [
-    "pytest>=9.2.0",
-]
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

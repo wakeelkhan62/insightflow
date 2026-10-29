@@ -14,6 +14,8 @@ def count_duplicate_rows(df: pd.DataFrame) -> int:
     The first copy counts as the original, so 3 identical rows give 2.
     """
     return int(df.duplicated().sum())
+
+
 def count_duplicate_keys(df: pd.DataFrame, key_column: str) -> int:
     """Return how many rows reuse a key value that appeared earlier.
 
