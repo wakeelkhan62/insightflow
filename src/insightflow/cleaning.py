@@ -34,11 +34,15 @@ def remove_duplicate_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     return df[~is_duplicate].copy(), df[is_duplicate].copy()
 
 
-FILL_STRATEGIES = {"mean", "median", "mode"}
+FILL_STRATEGIES = {"mean", "median", "mode", "unknown"}
+NUMERIC_STRATEGIES = {"mean", "median"}
+TEXT_STRATEGIES = {"unknown"}
 
 
 def _fill_value(values: pd.Series, strategy: str):
-    """Return the mean, median or mode of the non-missing values, or None."""
+    """Return the value to fill with, or None if there is no reliable source."""
+    if strategy == "unknown":
+        return "Unknown"
     values = values.dropna()
     if values.empty:
         return None
@@ -58,10 +62,15 @@ def _validate_fill_request(
             raise ValueError(f"Column '{column}' not found in dataset")
         if strategy not in FILL_STRATEGIES:
             raise ValueError(f"Unknown strategy '{strategy}' for column '{column}'")
-        if strategy in {"mean", "median"} and not ptypes.is_numeric_dtype(df[column]):
+        is_numeric = ptypes.is_numeric_dtype(df[column])
+        if strategy in NUMERIC_STRATEGIES and not is_numeric:
             raise ValueError(
                 f"Strategy '{strategy}' needs a numeric column, "
                 f"but '{column}' is not numeric"
+            )
+        if strategy in TEXT_STRATEGIES and is_numeric:
+            raise ValueError(
+                f"Strategy '{strategy}' needs a text column, but '{column}' is numeric"
             )
     if group_by is not None and group_by not in df.columns:
         raise ValueError(f"Column '{group_by}' not found in dataset")
@@ -72,15 +81,17 @@ def fill_missing_values(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return (filled, audit): a copy with gaps filled, and a record of each fill.
 
-    strategies maps column -> "mean", "median" or "mode". With group_by, each
-    gap is filled from rows in the same group only. Gaps with no source values
-    stay missing. The input DataFrame is not changed.
+    strategies maps column -> "mean", "median", "mode" or "unknown". With
+    group_by, each gap is filled from rows in the same group only. Gaps with
+    no source values stay missing. Each filled column gets a
+    "<column>_was_filled" flag column. The input DataFrame is not changed.
     """
     _validate_fill_request(df, strategies, group_by)
 
     filled = df.copy()
     audit = []
     for column, strategy in strategies.items():
+        was_filled = pd.Series(False, index=df.index)
         for row in df.index[df[column].isna()]:
             if group_by is None:
                 source = df[column]
@@ -92,8 +103,10 @@ def fill_missing_values(
             if ptypes.is_integer_dtype(df[column]):
                 value = round(value)
             filled.at[row, column] = value
+            was_filled[row] = True
             audit.append(
                 {"row": row, "column": column, "strategy": strategy, "value": value}
             )
+        filled[f"{column}_was_filled"] = was_filled
     columns = ["row", "column", "strategy", "value"]
     return filled, pd.DataFrame(audit, columns=columns)

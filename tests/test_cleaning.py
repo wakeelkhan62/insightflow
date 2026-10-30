@@ -127,3 +127,30 @@ def test_group_without_values_stays_missing():
 
     assert filled["unit_price"].isna().sum() == 1
     assert audit.empty
+
+
+def test_adds_flag_column_marking_filled_cells():
+    """A <column>_was_filled column shows exactly which cells were estimated."""
+    df = _sales_with_gaps()
+
+    filled, _ = fill_missing_values(df, {"unit_price": "median"}, group_by="product")
+
+    assert list(filled["unit_price_was_filled"]) == [False, False, True, False, True]
+    assert "unit_price_was_filled" not in df.columns
+
+
+def test_fills_text_column_with_unknown():
+    """The unknown strategy fills text gaps with 'Unknown' instead of guessing."""
+    df = pd.DataFrame({"city": pd.array(["Lahore", None], dtype="string")})
+
+    filled, _ = fill_missing_values(df, {"city": "unknown"})
+
+    assert list(filled["city"]) == ["Lahore", "Unknown"]
+
+
+def test_unknown_on_numeric_column_raises_clear_error():
+    """'Unknown' cannot be put into a number column."""
+    df = _sales_with_gaps()
+
+    with pytest.raises(ValueError, match="text column"):
+        fill_missing_values(df, {"unit_price": "unknown"})
