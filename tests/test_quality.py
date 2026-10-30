@@ -5,6 +5,7 @@ from insightflow.quality import (
     count_duplicate_keys,
     count_duplicate_rows,
     find_missing_values,
+    profile_column_types,
 )
 
 
@@ -60,3 +61,24 @@ def test_missing_key_column_raises_clear_error():
 
     with pytest.raises(ValueError, match="orderid"):
         count_duplicate_keys(df, "orderid")
+
+
+def test_profiles_each_column_with_a_simple_type_label():
+    """Each column gets a business-friendly type label."""
+    df = pd.DataFrame(
+        {
+            "order_id": pd.array([1, 2], dtype="Int64"),
+            "price": pd.array([1.5, None], dtype="Float64"),
+            "product": pd.array(["Laptop", "Mouse"], dtype="string"),
+            "paid": pd.array([True, None], dtype="boolean"),
+            "order_date": pd.to_datetime(["2026-01-05", "2026-01-06"]),
+        }
+    )
+
+    assert profile_column_types(df) == {
+        "order_id": "integer",
+        "price": "decimal",
+        "product": "text",
+        "paid": "boolean",
+        "order_date": "datetime",
+    }

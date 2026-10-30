@@ -1,4 +1,5 @@
 import pandas as pd
+from pandas.api import types as ptypes
 
 
 def find_missing_values(df: pd.DataFrame) -> dict[str, int]:
@@ -24,3 +25,21 @@ def count_duplicate_keys(df: pd.DataFrame, key_column: str) -> int:
     if key_column not in df.columns:
         raise ValueError(f"Column '{key_column}' not found in dataset")
     return int(df[key_column].duplicated().sum())
+
+
+def _type_label(series: pd.Series) -> str:
+    """Map a pandas dtype to a simple, business-friendly label."""
+    if ptypes.is_bool_dtype(series):
+        return "boolean"
+    if ptypes.is_integer_dtype(series):
+        return "integer"
+    if ptypes.is_float_dtype(series):
+        return "decimal"
+    if ptypes.is_datetime64_any_dtype(series):
+        return "datetime"
+    return "text"
+
+
+def profile_column_types(df: pd.DataFrame) -> dict[str, str]:
+    """Return a simple type label for every column."""
+    return {str(column): _type_label(df[column]) for column in df.columns}

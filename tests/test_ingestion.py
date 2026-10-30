@@ -2,6 +2,7 @@ from insightflow.ingestion import load_csv
 
 
 def test_load_csv_reads_rows_and_columns(tmp_path):
+    """A small CSV loads with the right number of rows and column names."""
     csv_file = tmp_path / "sales.csv"
     csv_file.write_text("order_id,product\n1,Laptop\n2,Mouse\n")
 
