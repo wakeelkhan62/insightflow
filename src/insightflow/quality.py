@@ -43,3 +43,22 @@ def _type_label(series: pd.Series) -> str:
 def profile_column_types(df: pd.DataFrame) -> dict[str, str]:
     """Return a simple type label for every column."""
     return {str(column): _type_label(df[column]) for column in df.columns}
+
+
+def detect_date_columns(df: pd.DataFrame, min_share: float = 0.9) -> list[str]:
+    """Return text columns whose values look like dates (YYYY-MM-DD).
+
+    Only suggests columns; the data itself is not changed.
+    """
+    date_columns = []
+    for column in df.columns:
+        series = df[column]
+        if _type_label(series) != "text":
+            continue
+        values = series.dropna().astype("string")
+        if values.empty:
+            continue
+        parsed = pd.to_datetime(values, errors="coerce", format="ISO8601")
+        if parsed.notna().mean() >= min_share:
+            date_columns.append(str(column))
+    return date_columns

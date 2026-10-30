@@ -4,6 +4,7 @@ import pytest
 from insightflow.quality import (
     count_duplicate_keys,
     count_duplicate_rows,
+    detect_date_columns,
     find_missing_values,
     profile_column_types,
 )
@@ -82,3 +83,17 @@ def test_profiles_each_column_with_a_simple_type_label():
         "paid": "boolean",
         "order_date": "datetime",
     }
+
+
+def test_detects_text_columns_that_contain_dates():
+    """Only text columns that are mostly valid dates are suggested."""
+    df = pd.DataFrame(
+        {
+            "order_id": pd.array([2026, 2025, 2024], dtype="Int64"),
+            "order_date": pd.array(["2026-01-05", "2026-01-06", None], dtype="string"),
+            "product": pd.array(["Laptop", "Mouse", "Pen"], dtype="string"),
+            "note": pd.array(["2026-01-05", "late", "call back"], dtype="string"),
+        }
+    )
+
+    assert detect_date_columns(df) == ["order_date"]
