@@ -62,3 +62,23 @@ def detect_date_columns(df: pd.DataFrame, min_share: float = 0.9) -> list[str]:
         if parsed.notna().mean() >= min_share:
             date_columns.append(str(column))
     return date_columns
+
+
+def build_quality_report(df: pd.DataFrame, key_column: str | None = None) -> dict:
+    """Run every quality check and return the results in one report.
+
+    Exact duplicate rows are removed before counting conflicting keys,
+    so the same problem is never counted twice. The input is not changed.
+    """
+    report = {
+        "row_count": len(df),
+        "column_count": len(df.columns),
+        "missing_values": find_missing_values(df),
+        "duplicate_rows": count_duplicate_rows(df),
+        "column_types": profile_column_types(df),
+        "date_columns": detect_date_columns(df),
+    }
+    if key_column is not None:
+        unique_rows = df.drop_duplicates()
+        report["conflicting_keys"] = count_duplicate_keys(unique_rows, key_column)
+    return report

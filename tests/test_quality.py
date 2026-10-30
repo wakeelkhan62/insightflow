@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from insightflow.quality import (
+    build_quality_report,
     count_duplicate_keys,
     count_duplicate_rows,
     detect_date_columns,
@@ -97,3 +98,29 @@ def test_detects_text_columns_that_contain_dates():
     )
 
     assert detect_date_columns(df) == ["order_date"]
+
+
+def test_quality_report_does_not_double_count_duplicates():
+    """An exact copy is a duplicate row, not also a conflicting key."""
+    df = pd.DataFrame(
+        {
+            "order_id": [1, 1, 1, 2],
+            "product": ["Laptop", "Laptop", "Mouse", "Pen"],
+        }
+    )
+
+    report = build_quality_report(df, key_column="order_id")
+
+    assert report["row_count"] == 4
+    assert report["column_count"] == 2
+    assert report["duplicate_rows"] == 1
+    assert report["conflicting_keys"] == 1
+
+
+def test_quality_report_skips_key_check_when_no_key_given():
+    """Without a key column, the report has no conflicting_keys entry."""
+    df = pd.DataFrame({"product": ["Laptop", "Mouse"]})
+
+    report = build_quality_report(df)
+
+    assert "conflicting_keys" not in report
