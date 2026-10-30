@@ -6,6 +6,7 @@ from insightflow.cleaning import (
     convert_date_columns,
     fill_missing_values,
     remove_duplicate_rows,
+    suggest_fill_strategies,
 )
 
 
@@ -154,3 +155,31 @@ def test_unknown_on_numeric_column_raises_clear_error():
 
     with pytest.raises(ValueError, match="text column"):
         fill_missing_values(df, {"unit_price": "unknown"})
+
+
+def test_suggests_a_safe_strategy_for_each_column_with_gaps():
+    """IDs and dates are never filled, sparse columns are flagged, others get
+    median (numbers) or unknown (text). Complete columns are skipped."""
+    df = pd.DataFrame(
+        {
+            "order_id": pd.array([1, None, 3, 4, 5], dtype="Int64"),
+            "order_date": pd.array(
+                ["2026-01-05", None, "2026-01-07", "2026-01-08", "2026-01-09"],
+                dtype="string",
+            ),
+            "unit_price": pd.array([100, None, 300, 400, 500], dtype="Int64"),
+            "city": pd.array(
+                ["Lahore", None, "Karachi", "Lahore", "Multan"], dtype="string"
+            ),
+            "discount": pd.array([None, None, None, 5, 10], dtype="Int64"),
+            "product": pd.array(["A", "B", "C", "D", "E"], dtype="string"),
+        }
+    )
+
+    assert suggest_fill_strategies(df) == {
+        "order_id": "do_not_fill",
+        "order_date": "do_not_fill",
+        "unit_price": "median",
+        "city": "unknown",
+        "discount": "too_many_missing",
+    }

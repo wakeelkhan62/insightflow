@@ -1,6 +1,8 @@
 import pandas as pd
 from pandas.api import types as ptypes
 
+from insightflow.quality import detect_date_columns
+
 
 def convert_date_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """Return a copy of df with the approved columns converted to dates.
@@ -110,3 +112,41 @@ def fill_missing_values(
         filled[f"{column}_was_filled"] = was_filled
     columns = ["row", "column", "strategy", "value"]
     return filled, pd.DataFrame(audit, columns=columns)
+
+
+def _looks_like_id(column: str) -> bool:
+    """Return True if the column name suggests an identifier, e.g. 'order_id'."""
+    name = column.strip().lower()
+    return name == "id" or name.endswith(("_id", " id"))
+
+
+def suggest_fill_strategies(
+    df: pd.DataFrame, max_missing_share: float = 0.4
+) -> dict[str, str]:
+    """Suggest a fill strategy for every column that has missing values.
+
+    Returns column -> "median", "unknown", "do_not_fill" or "too_many_missing".
+    These are suggestions for the user to approve; nothing is changed.
+    """
+    text_dates = set(detect_date_columns(df))
+    suggestions = {}
+    for column in df.columns:
+        series = df[column]
+        name = str(column)
+        missing_share = series.isna().mean()
+        if missing_share == 0:
+            continue
+        if missing_share > max_missing_share:
+            suggestions[name] = "too_many_missing"
+        elif (
+            _looks_like_id(name)
+            or name in text_dates
+            or ptypes.is_datetime64_any_dtype(series)
+            or ptypes.is_bool_dtype(series)
+        ):
+            suggestions[name] = "do_not_fill"
+        elif ptypes.is_numeric_dtype(series):
+            suggestions[name] = "median"
+        else:
+            suggestions[name] = "unknown"
+    return suggestions
