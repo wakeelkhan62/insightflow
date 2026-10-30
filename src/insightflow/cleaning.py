@@ -22,3 +22,12 @@ def convert_date_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
             )
         converted[column] = parsed
     return converted
+
+
+def remove_duplicate_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (cleaned, removed): data without extra copies, and the copies removed.
+
+    The first copy of each row is kept. The input DataFrame is not changed.
+    """
+    is_duplicate = df.duplicated(keep="first")
+    return df[~is_duplicate].copy(), df[is_duplicate].copy()
