@@ -9,6 +9,8 @@ def test_load_csv_reads_rows_and_columns(tmp_path):
 
     assert len(df) == 2
     assert list(df.columns) == ["order_id", "product"]
+
+
 def test_whole_numbers_stay_integers_when_values_are_missing(tmp_path):
     """An empty cell must not turn a whole-number column into decimals."""
     csv_file = tmp_path / "sales.csv"
