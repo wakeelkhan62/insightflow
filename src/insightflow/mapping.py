@@ -51,3 +51,28 @@ def suggest_column_mapping(df: pd.DataFrame) -> dict[str, str]:
                 used.add(name)
                 break
     return mapping
+
+
+def apply_column_mapping(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
+    """Return a copy of df with mapped columns renamed to standard field names.
+
+    mapping is standard field -> original column, as confirmed by the user.
+    Unmapped columns keep their names. The input DataFrame is not changed.
+    Raises ValueError for unknown fields, missing columns, a column used
+    twice, or a rename that would clash with an existing column.
+    """
+    unknown_fields = sorted(set(mapping) - set(STANDARD_FIELDS))
+    if unknown_fields:
+        raise ValueError(f"Unknown standard fields: {unknown_fields}")
+    missing = sorted(set(mapping.values()) - set(map(str, df.columns)))
+    if missing:
+        raise ValueError(f"Columns not found in dataset: {missing}")
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError("Each column can be mapped to only one field")
+
+    renames = {column: field for field, column in mapping.items()}
+    renamed = [renames.get(str(c), str(c)) for c in df.columns]
+    clashes = sorted({name for name in renamed if renamed.count(name) > 1})
+    if clashes:
+        raise ValueError(f"Mapping creates duplicate column names: {clashes}")
+    return df.rename(columns=renames)
