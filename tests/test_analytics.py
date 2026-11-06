@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from insightflow.analytics import add_revenue, revenue_summary
+from insightflow.analytics import add_revenue, revenue_by_product, revenue_summary
 
 
 def _sales() -> pd.DataFrame:
@@ -40,3 +40,24 @@ def test_missing_standard_columns_raise_clear_error():
 
     with pytest.raises(ValueError, match="column mapping"):
         add_revenue(df)
+
+
+def test_revenue_by_product_sorted_with_evidence():
+    """Products are ranked by revenue; a product with no usable rows is last."""
+    df = pd.DataFrame(
+        {
+            "product": pd.array(
+                ["Laptop", "Mouse", "Keyboard", "Laptop"], dtype="string"
+            ),
+            "quantity": pd.array([2, 5, None, 1], dtype="Int64"),
+            "unit_price": pd.array([85000, 1500, 3000, 85000], dtype="Int64"),
+        }
+    )
+
+    result = revenue_by_product(df)
+
+    assert list(result["product"]) == ["Laptop", "Mouse", "Keyboard"]
+    assert list(result["revenue"].iloc[:2]) == [255000, 7500]
+    assert pd.isna(result["revenue"].iloc[2])
+    assert list(result["rows_included"]) == [2, 1, 0]
+    assert list(result["rows_excluded"]) == [0, 0, 1]

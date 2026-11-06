@@ -38,3 +38,21 @@ def revenue_summary(df: pd.DataFrame) -> dict:
         "rows_included": int(included.sum()),
         "rows_excluded": int((~included).sum()),
     }
+
+
+def revenue_by_product(df: pd.DataFrame) -> pd.DataFrame:
+    """Return revenue per product, highest first, with rows included and excluded.
+
+    A product whose rows all lack revenue shows a missing revenue (not 0) and
+    is listed last. The input DataFrame is not changed.
+    """
+    _require_columns(df, ["product"])
+    data = add_revenue(df)
+    data["included"] = data["revenue"].notna()
+    summary = data.groupby("product", dropna=False).agg(
+        revenue=("revenue", lambda r: r.sum(min_count=1)),
+        rows_included=("included", "sum"),
+        rows_excluded=("included", lambda i: (~i).sum()),
+    )
+    summary = summary.sort_values("revenue", ascending=False, na_position="last")
+    return summary.reset_index()
