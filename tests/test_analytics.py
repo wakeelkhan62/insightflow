@@ -1,7 +1,12 @@
 import pandas as pd
 import pytest
 
-from insightflow.analytics import add_revenue, revenue_by_product, revenue_summary
+from insightflow.analytics import (
+    add_revenue,
+    revenue_by_month,
+    revenue_by_product,
+    revenue_summary,
+)
 
 
 def _sales() -> pd.DataFrame:
@@ -61,3 +66,34 @@ def test_revenue_by_product_sorted_with_evidence():
     assert pd.isna(result["revenue"].iloc[2])
     assert list(result["rows_included"]) == [2, 1, 0]
     assert list(result["rows_excluded"]) == [0, 0, 1]
+
+
+def test_revenue_by_month_fills_gap_months_and_counts_undated_rows():
+    """Months are in order, an empty month shows 0, and undated rows are counted."""
+    df = pd.DataFrame(
+        {
+            "order_date": pd.to_datetime(
+                ["2026-01-05", "2026-01-20", "2026-03-02", "2026-03-15", None]
+            ),
+            "quantity": pd.array([2, 1, None, 4, 1], dtype="Int64"),
+            "unit_price": pd.array([100, 50, 10, 25, 99], dtype="Int64"),
+        }
+    )
+
+    monthly, undated = revenue_by_month(df)
+
+    assert list(monthly["month"]) == ["2026-01", "2026-02", "2026-03"]
+    assert list(monthly["revenue"]) == [250, 0, 100]
+    assert list(monthly["rows_included"]) == [2, 0, 1]
+    assert list(monthly["rows_excluded"]) == [0, 0, 1]
+    assert undated == 1
+
+
+def test_revenue_by_month_requires_converted_dates():
+    """Text dates are rejected with a hint to convert them first."""
+    df = pd.DataFrame(
+        {"order_date": ["2026-01-05"], "quantity": [1], "unit_price": [1]}
+    )
+
+    with pytest.raises(ValueError, match="Convert it first"):
+        revenue_by_month(df)
