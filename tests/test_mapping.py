@@ -58,3 +58,18 @@ def test_rename_that_creates_duplicate_names_raises_clear_error():
 
     with pytest.raises(ValueError, match="duplicate"):
         apply_column_mapping(df, {"quantity": "Qty"})
+
+
+def test_maps_camel_case_column_names():
+    """CamelCase names from databases and exports, like 'UnitPrice', are matched."""
+    df = pd.DataFrame(
+        columns=["OrderID", "OrderDate", "ProductName", "Quantity", "UnitPrice"]
+    )
+
+    assert suggest_column_mapping(df) == {
+        "order_id": "OrderID",
+        "order_date": "OrderDate",
+        "product": "ProductName",
+        "quantity": "Quantity",
+        "unit_price": "UnitPrice",
+    }

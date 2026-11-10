@@ -27,7 +27,11 @@ STANDARD_FIELDS: dict[str, set[str]] = {
 
 
 def _normalize(name: str) -> str:
-    """Lower-case a column name, drop text in brackets, and unify separators."""
+    """Split camelCase, lower-case, drop text in brackets, and unify separators.
+
+    Examples: "UnitPrice" -> "unit price", "Rate (PKR)" -> "rate".
+    """
+    name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
     name = re.sub(r"\(.*?\)", "", name.lower())
     name = re.sub(r"[_\-.]+", " ", name)
     return " ".join(name.split())
