@@ -26,6 +26,7 @@ from insightflow.mapping import (
     suggest_column_mapping,
 )
 from insightflow.quality import build_quality_report
+from insightflow.reconciliation import reconcile_totals
 from insightflow.validation import validate_sales
 
 MAX_UPLOAD_MB = 50
@@ -83,11 +84,14 @@ st.caption("We guessed which column is which. Change any that are wrong.")
 suggested = suggest_column_mapping(df)
 options = [NOT_IN_FILE, *map(str, df.columns)]
 mapping: dict[str, str] = {}
-for box, field in zip(st.columns(len(STANDARD_FIELDS)), STANDARD_FIELDS, strict=True):
-    default = suggested.get(field, NOT_IN_FILE)
-    choice = box.selectbox(field, options, index=options.index(default), key=field)
-    if choice != NOT_IN_FILE:
-        mapping[field] = choice
+fields = list(STANDARD_FIELDS)
+for start in range(0, len(fields), 5):  # 5 dropdowns per row
+    row_fields = fields[start : start + 5]
+    for box, field in zip(st.columns(5), row_fields, strict=False):
+        default = suggested.get(field, NOT_IN_FILE)
+        choice = box.selectbox(field, options, index=options.index(default), key=field)
+        if choice != NOT_IN_FILE:
+            mapping[field] = choice
 fix_text = st.checkbox(
     "Fix inconsistent text (extra spaces, different capital letters)", value=True
 )
@@ -216,6 +220,32 @@ elif discount_report:
     st.caption("Net revenue = quantity x unit price, after discounts, before tax.")
 else:
     st.caption("Revenue = quantity x unit price (gross, before discounts).")
+
+# Reconciliation: does our calculation reproduce the file's own total column?
+if "total_amount" in data.columns:
+    check = reconcile_totals(data)
+    title = f"Check against your file's totals: {check['match_percent']}% of rows match"
+    with st.expander(title):
+        if check["best_formula"]:
+            st.write(
+                f"Your file's total = **{check['best_formula']}** for "
+                f"{check['rows_matching']:,} of {check['rows_checked']:,} rows."
+            )
+        else:
+            st.warning("No formula we tried explains your file's total column.")
+        if check["rows_not_matching"]:
+            st.write(
+                f"{check['rows_not_matching']:,} rows do not match. "
+                "These are worth checking in your file:"
+            )
+            st.dataframe(pd.DataFrame(check["examples"]), hide_index=True)
+        st.caption(
+            "Formulas tried (% of rows matching): "
+            + "; ".join(
+                f"{name} {pct}%"
+                for name, pct in check["all_formulas_match_percent"].items()
+            )
+        )
 
 # 4. Monthly trend and forecast
 if "order_date" in data.columns:

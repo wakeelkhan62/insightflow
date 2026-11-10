@@ -25,6 +25,22 @@ STANDARD_FIELDS: dict[str, set[str]] = {
     "unit_price": {"unit price", "price", "rate", "selling price"},
     "order_status": {"order status", "status", "order state"},
     "discount": {"discount", "discount amount", "discount percent", "disc"},
+    "tax": {"tax", "tax amount", "gst", "vat", "sales tax"},
+    "shipping": {
+        "shipping",
+        "shipping cost",
+        "shipping fee",
+        "delivery charges",
+        "delivery fee",
+    },
+    "total_amount": {
+        "total amount",
+        "total",
+        "grand total",
+        "order total",
+        "line total",
+        "amount paid",
+    },
 }
 
 
