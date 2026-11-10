@@ -162,3 +162,39 @@ def test_revenue_endpoint_rejects_mapping_to_missing_column():
 
     assert response.status_code == 400
     assert "Units" in response.json()["detail"]
+
+
+def test_revenue_endpoint_includes_monthly_trend_when_dates_exist():
+    """With an order_date column, the response includes revenue per month."""
+    content = (
+        b"order_date,product,quantity,unit_price\n"
+        b"2026-01-05,Laptop,1,100\n"
+        b"2026-03-02,Mouse,2,10\n"
+    )
+
+    body = _upload_revenue(content).json()
+
+    assert [m["month"] for m in body["by_month"]["months"]] == [
+        "2026-01",
+        "2026-02",
+        "2026-03",
+    ]
+    assert [m["revenue"] for m in body["by_month"]["months"]] == [100, 0, 20]
+    assert body["by_month"]["undated_rows"] == 0
+
+
+def test_revenue_endpoint_without_dates_has_no_monthly_trend():
+    """Without an order_date column, by_month is null instead of an error."""
+    body = _upload_revenue(REVENUE_CSV).json()
+
+    assert body["by_month"] is None
+
+
+def test_revenue_endpoint_reports_invalid_dates():
+    """A date that cannot be read gives a clear 400 instead of a crash."""
+    content = b"order_date,product,quantity,unit_price\nsoon,Laptop,1,100\n"
+
+    response = _upload_revenue(content)
+
+    assert response.status_code == 400
+    assert "not valid dates" in response.json()["detail"]

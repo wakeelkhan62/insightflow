@@ -5,8 +5,12 @@ import os
 import pandas as pd
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 
-from insightflow.analytics import revenue_by_product, revenue_summary
-from insightflow.cleaning import remove_duplicate_rows
+from insightflow.analytics import (
+    revenue_by_month,
+    revenue_by_product,
+    revenue_summary,
+)
+from insightflow.cleaning import convert_date_columns, remove_duplicate_rows
 from insightflow.ingestion import load_csv
 from insightflow.mapping import apply_column_mapping, suggest_column_mapping
 from insightflow.quality import build_quality_report
@@ -120,4 +124,17 @@ async def revenue(
         "duplicates_removed": removed_count,
         "summary": summary,
         "by_product": _records(by_product),
+        "by_month": _monthly_or_none(df),
     }
+
+
+def _monthly_or_none(df: pd.DataFrame) -> dict | None:
+    """Return the monthly trend if the data has an order_date column, else None."""
+    if "order_date" not in df.columns:
+        return None
+    try:
+        dated = convert_date_columns(df, ["order_date"])
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    monthly, undated = revenue_by_month(dated)
+    return {"months": _records(monthly), "undated_rows": undated}
