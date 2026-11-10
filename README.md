@@ -2,108 +2,94 @@
 
 Turn messy sales data into revenue numbers you can trust.
 
-InsightFlow takes a sales CSV, checks it for problems, cleans it with your approval,
-calculates revenue, and forecasts next month. Every number comes with its evidence:
-how many rows it is based on, how many were left out, and why.
+Upload a sales CSV and InsightFlow checks it, cleans it with your approval,
+calculates gross and net revenue, breaks it down, checks itself against the
+file's own totals, and forecasts next month. Every number shows its evidence:
+how many rows it is based on, what was left out, and why.
 
-> **Status:** working MVP. It runs locally with a Streamlit web app and a FastAPI
-> backend. Login, a database, the AI chat and deployment are not built yet
-> (see [Roadmap](#roadmap)).
+> **Status:** working MVP, tested on 2,400+ and 100,000-row files. Runs locally
+> as a Streamlit web app plus a FastAPI backend. Login, a database, the AI chat
+> and deployment are not built yet (see [Roadmap](#roadmap)).
 
 ## What it does
 
-1. **Load** a CSV file (up to 50 MB by default), keeping whole numbers as whole numbers.
-2. **Check quality:** missing values per column, exact duplicate rows, conflicting
-   IDs (same order ID, different data), column types, and columns that contain dates.
-3. **Map columns:** recognises names like `Qty`, `UnitPrice`, `OrderID` or
-   `Rate (PKR)` and suggests which standard field each one is. You confirm it.
-4. **Clean, with approval:** convert date columns, remove exact duplicate rows
-   (and report which ones), and fill missing values by product group with an
-   audit trail and `<column>_was_filled` flag columns.
-5. **Analyse:** total revenue, revenue by product, and revenue by month (with
-   empty months shown as 0). Money is rounded to 2 decimals.
-6. **Forecast** next month's revenue. Three simple methods are back-tested on the
-   last 12 months; the most accurate one makes the forecast, and its error is shown.
+**Understand the file**
+- Quality report: missing values per column, exact duplicate rows, conflicting
+  IDs, column types, and date detection
+- Column mapping: recognises names like `Qty`, `UnitPrice`, `Invoice No`,
+  `Rate (PKR)` or `TotalAmount` for 10 standard fields; you confirm or change them
+
+**Clean, with your approval (nothing is changed silently)**
+- Fixes inconsistent text: `CANCELLED`, `cancelled ` and `Cancelled` become one value
+- Removes exact duplicate rows and reports how many
+- Leaves out cancelled, returned and refunded orders (you choose the statuses)
+- Leaves out orders dated in the future (almost always typos)
+- Fills missing values by product group (median / mean / mode / "Unknown"),
+  with an audit trail and `<column>_was_filled` flags
+
+**Check the data**
+- Business rules: zero or negative quantity and price, future dates, and
+  extreme values judged per product (IQR rule), with CSV line numbers
+- Reconciliation: finds which formula reproduces the file's own total
+  (for example `net + tax + shipping`) and lists the rows that do not match
+
+**Analyse**
+- Gross sales, discounts (fraction, percent or amount, detected and confirmed)
+  and net revenue
+- Orders, units sold, average and median order value
+- Revenue by product, category, city, payment method or any other column,
+  with an 80/20 concentration check
+- Monthly trend and yearly growth (only between complete years)
+- Next-month forecast: three simple methods back-tested on the last 12 months;
+  the most accurate one is used and its error is shown
 
 ## Principles
 
-- **The original data is never changed silently.** Every cleaning step returns a
-  new copy and a record of what changed.
-- **The system suggests, the user decides** (column mapping, duplicates, fill strategy).
-- **Every number has evidence** (rows used, rows excluded, forecast error %).
-- **Unknown is not zero.** Missing revenue stays missing; values are never invented
-  without a reliable source.
+- **The original data is never changed silently.** Every step returns a new copy
+  and a record of what changed.
+- **The system suggests, the user decides.**
+- **Every number has evidence:** rows used, rows left out, and the reason.
+- **Unknown is not zero.** Missing revenue stays missing; values are never
+  invented without a reliable source.
 
 ## Quick start (Windows PowerShell)
 
 Requirements: Python 3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```powershell
-git clone <your-repo-url> InsightFlow
-cd InsightFlow
+git clone https://github.com/wakeelkhan62/insightflow.git
+cd insightflow
 uv sync
-```
-
-**Run the web app:**
-
-```powershell
 uv run streamlit run src/insightflow/streamlit_app.py
 ```
 
-Open http://localhost:8501, upload a CSV, check the suggested columns, and read
-the results.
+Open http://localhost:8501 and upload a CSV. To try it straight away, use
+`data/insightflow_test_sales.csv`: a synthetic 3-year dataset with deliberate
+problems (duplicates, messy statuses, a future date, wrong totals and more).
 
-**Run the API:**
-
-```powershell
-uv run fastapi dev src/insightflow/api.py
-```
-
-Interactive API docs: http://127.0.0.1:8000/docs
-
-To change the upload limit (for example to 100 MB):
-
-```powershell
-$env:INSIGHTFLOW_MAX_UPLOAD_MB = "100"
-```
-
-## API endpoints
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | Shows the server is running |
-| POST | `/datasets/quality-report` | Upload a CSV, get its quality report. Optional `key_column` |
-| POST | `/datasets/revenue` | Upload a CSV, get revenue summary, by product, by month and a forecast |
-
-`/datasets/revenue` accepts an optional `mapping` form field with the confirmed
-column mapping, for example:
-
-```json
-{"order_id": "OrderID", "order_date": "OrderDate", "product": "ProductName",
- "quantity": "Quantity", "unit_price": "UnitPrice"}
-```
-
-If the columns do not match and no mapping is sent, the error response includes a
-`suggested_mapping`.
+**API** (FastAPI): `uv run fastapi dev src/insightflow/api.py`, then open
+http://127.0.0.1:8000/docs
 
 ## Project structure
 
 ```
 src/insightflow/
-  ingestion.py       load CSV files
-  quality.py         quality checks and the combined quality report
-  cleaning.py        date conversion, duplicate removal, missing-value filling
-  mapping.py         suggest and apply column mapping
-  analytics.py       revenue, by product, by month
-  forecasting.py     back-tested next-month forecast
-  api.py             FastAPI endpoints
-  streamlit_app.py   Streamlit web app
-tests/               one test file per module
-data/sample_sales.csv  small sample with deliberate problems
+  ingestion.py        load CSV files
+  quality.py          quality checks and the combined quality report
+  mapping.py          suggest and apply column mapping (10 standard fields)
+  cleaning.py         text fixing, dates, duplicates, status, future dates, filling
+  validation.py       business rule checks with CSV line numbers
+  discounts.py        discount type detection and net revenue
+  reconciliation.py   check revenue against the file's own total column
+  analytics.py        revenue, KPIs, breakdowns, concentration, monthly, yearly
+  forecasting.py      back-tested next-month forecast
+  streamlit_app.py    web app
+  api.py              FastAPI endpoints
+tests/                one test file per module
 ```
 
-The engine (`ingestion` to `forecasting`) has no web code in it. The API and the
-Streamlit app both call the same engine functions, so the numbers always match.
+The engine modules contain no web code. The app and the API call the same
+functions, so the numbers always match.
 
 ## Tests and code quality
 
@@ -114,24 +100,24 @@ uv run pytest -q
 uv run ruff check .
 ```
 
-All checks must pass before every commit.
+89 tests. All checks must pass before every commit.
 
 ## Known limitations
 
-- **Revenue is gross** (quantity x unit price). Discounts, tax, shipping and
-  cancelled or returned orders are not taken into account yet.
-- **CSV only.** Excel files are not supported yet.
-- **Dates must be in `YYYY-MM-DD` format** to be detected and converted.
-- **Column mapping is rule-based.** Unknown column names must be chosen by hand.
-- **Nothing is stored.** Uploaded files are processed in memory and forgotten.
-- **No login.** Anyone who can open the app can use it. Run it locally only.
-- **The forecast uses simple methods** and predicts one month ahead. Read the error %.
+- **CSV only**; Excel is not supported yet.
+- **Dates must be in `YYYY-MM-DD` format.**
+- **Column mapping is rule-based**; unknown names must be chosen by hand.
+- **The API is behind the app:** it does not yet apply text fixing, status
+  filtering, future dates or discounts.
+- **Nothing is stored**, and there is **no login**. Run it locally only.
+- **The forecast** predicts one month ahead with simple methods. Read its error %.
 
 ## Roadmap
 
-- Net revenue: discounts and excluding cancelled or returned orders
+- One shared pipeline used by both the app and the API
+- Lost-revenue analysis (cancellations and returns)
 - Excel (`.xlsx`) upload
-- PostgreSQL database: save datasets and analyses
+- PostgreSQL: save datasets and analyses
 - User accounts and separate workspaces per business
 - AI chat (LangGraph) that answers questions using the engine's calculations
 - Docker, CI and deployment
