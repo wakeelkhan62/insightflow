@@ -13,6 +13,8 @@ from insightflow.cleaning import (
     convert_date_columns,
     remove_duplicate_rows,
     split_by_order_status,
+    split_future_dates,
+    standardize_text_values,
     suggest_excluded_statuses,
 )
 from insightflow.forecasting import forecast_next_month
@@ -23,6 +25,7 @@ from insightflow.mapping import (
     suggest_column_mapping,
 )
 from insightflow.quality import build_quality_report
+from insightflow.validation import validate_sales
 
 MAX_UPLOAD_MB = 50
 NOT_IN_FILE = "(not in my file)"
@@ -84,6 +87,9 @@ for box, field in zip(st.columns(len(STANDARD_FIELDS)), STANDARD_FIELDS, strict=
     choice = box.selectbox(field, options, index=options.index(default), key=field)
     if choice != NOT_IN_FILE:
         mapping[field] = choice
+fix_text = st.checkbox(
+    "Fix inconsistent text (extra spaces, different capital letters)", value=True
+)
 remove_duplicates = st.checkbox("Remove exact duplicate rows", value=True)
 
 if "quantity" not in mapping or "unit_price" not in mapping:
@@ -94,6 +100,27 @@ try:
 except ValueError as error:
     st.error(str(error))
     st.stop()
+
+# Text standardization: "CANCELLED", "cancelled " and "Cancelled" become one value
+if fix_text:
+    data, merges = standardize_text_values(data)
+    if not merges.empty:
+        with st.expander(f"Text fixed: {int(merges['rows_changed'].sum()):,} values"):
+            st.dataframe(merges, hide_index=True, width="stretch")
+
+# Business rule checks: flag problems, the user decides what to do
+checks = validate_sales(data)
+problems = [c for c in checks["checks"] if c["rows_flagged"]]
+with st.expander(f"Data checks ({len(problems)} problem types found)"):
+    if problems:
+        st.dataframe(pd.DataFrame(problems), hide_index=True, width="stretch")
+    else:
+        st.write("No problems found by the business rules.")
+    if checks["skipped"]:
+        st.caption(
+            "Not checked: "
+            + "; ".join(f"{s['name']} ({s['reason']})" for s in checks["skipped"])
+        )
 
 removed_count = 0
 if remove_duplicates:
@@ -115,15 +142,29 @@ if "order_status" in data.columns:
 else:
     st.caption("No order status column mapped, so every order counts as revenue.")
 
+# Future dates: a sale cannot happen after today, so these are almost always typos
+future_count = 0
+if "order_date" in data.columns:
+    kept, future = split_future_dates(data)
+    if len(future):
+        leave_out_future = st.checkbox(
+            f"Leave out {len(future):,} orders dated in the future",
+            value=True,
+            help="They would stretch the monthly chart into empty future months.",
+        )
+        if leave_out_future:
+            data, future_count = kept, len(future)
+
 # 3. Revenue summary
 st.subheader("Revenue")
 summary = revenue_summary(data)
-m1, m2, m3, m4, m5 = st.columns(5)
+m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric("Total revenue", money(summary["total_revenue"]))
 m2.metric("Rows used", f"{summary['rows_included']:,}")
 m3.metric("Missing qty/price", f"{summary['rows_excluded']:,}")
 m4.metric("Duplicates removed", f"{removed_count:,}")
 m5.metric("Left out by status", f"{status_excluded_count:,}")
+m6.metric("Future dates left out", f"{future_count:,}")
 if summary["rows_excluded"]:
     st.caption(
         f"{summary['rows_excluded']:,} rows were left out because quantity or price "
