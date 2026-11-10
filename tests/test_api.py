@@ -222,3 +222,44 @@ def test_revenue_endpoint_explains_when_forecast_is_not_possible():
 
     assert forecast["available"] is False
     assert "Need at least" in forecast["reason"]
+
+
+PIPELINE_CSV = (
+    b"order_id,order_date,product,quantity,unit_price,discount,order_status\n"
+    b"A,2026-01-05,Pen,2,100,0.1,Delivered\n"
+    b"B,2026-01-06,Pen,1,100,0,cancelled \n"
+    b"C,2026-02-01,Cup,3,50,0.2,DELIVERED\n"
+)
+
+
+def test_revenue_endpoint_uses_the_same_pipeline_as_the_app():
+    """Cancelled orders are left out and discounts give net revenue (180 + 120)."""
+    body = _upload_revenue(PIPELINE_CSV).json()
+
+    assert body["excluded_statuses"] == ["cancelled"]
+    assert body["status_excluded"] == 1
+    assert body["gross_total"] == 350.0
+    assert body["discount"]["discount_type"] == "fraction"
+    assert body["summary"]["total_revenue"] == 300.0
+    assert body["text_values_fixed"] == 2
+
+
+def test_revenue_endpoint_accepts_the_users_status_choice():
+    """Sending an empty list keeps every order, including the cancelled one."""
+    files = {"file": ("sales.csv", PIPELINE_CSV, "text/csv")}
+    response = client.post(
+        "/datasets/revenue", files=files, data={"excluded_statuses": "[]"}
+    )
+
+    assert response.json()["summary"]["total_revenue"] == 400.0
+
+
+def test_revenue_endpoint_rejects_invalid_status_list():
+    """A status list that is not JSON gives a clear 400."""
+    files = {"file": ("sales.csv", PIPELINE_CSV, "text/csv")}
+    response = client.post(
+        "/datasets/revenue", files=files, data={"excluded_statuses": "Cancelled"}
+    )
+
+    assert response.status_code == 400
+    assert "valid JSON" in response.json()["detail"]

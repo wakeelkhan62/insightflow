@@ -5,15 +5,13 @@ import os
 import pandas as pd
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 
-from insightflow.analytics import (
-    revenue_by_month,
-    revenue_by_product,
-    revenue_summary,
-)
-from insightflow.cleaning import convert_date_columns, remove_duplicate_rows
-from insightflow.forecasting import forecast_next_month
 from insightflow.ingestion import load_csv
-from insightflow.mapping import apply_column_mapping, suggest_column_mapping
+from insightflow.mapping import (
+    STANDARD_FIELDS,
+    apply_column_mapping,
+    suggest_column_mapping,
+)
+from insightflow.pipeline import PipelineOptions, run_pipeline
 from insightflow.quality import build_quality_report
 
 MAX_UPLOAD_MB = int(os.getenv("INSIGHTFLOW_MAX_UPLOAD_MB", "50"))
@@ -83,70 +81,103 @@ def _parse_mapping(mapping: str | None) -> dict[str, str] | None:
     return parsed
 
 
+def _parse_status_list(value: str | None) -> list[str] | None:
+    """Parse the confirmed statuses to leave out, sent as a JSON list of text."""
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise HTTPException(
+            status_code=400, detail="excluded_statuses must be valid JSON"
+        ) from error
+    if not isinstance(parsed, list) or not all(isinstance(s, str) for s in parsed):
+        raise HTTPException(
+            status_code=400,
+            detail='excluded_statuses must be a list like ["Cancelled"]',
+        )
+    return parsed
+
+
 @app.post("/datasets/revenue")
 async def revenue(
     file: UploadFile,
     mapping: str | None = Form(None),
+    excluded_statuses: str | None = Form(None),
     remove_duplicates: bool = True,
+    fix_text: bool = True,
+    leave_out_future: bool = True,
+    discount_type: str | None = None,
 ) -> dict:
-    """Upload a CSV and get revenue with evidence.
+    """Upload a CSV and get revenue with evidence, using the shared pipeline.
 
-    mapping is an optional JSON object (standard field -> column name) that the
-    user has confirmed, e.g. {"quantity": "Qty"}. Exact duplicate rows are
-    removed only when remove_duplicates is true, and the number removed is
-    reported. If standard columns are missing, the error includes a suggested
+    mapping: optional JSON object (standard field -> column name) confirmed by
+    the user, e.g. {"quantity": "Qty"}. Without it, columns that already have
+    standard names are used. excluded_statuses: optional JSON list; without it
+    the suggested non-revenue statuses (cancelled, returned...) are left out.
+    discount_type: fraction, percent or amount; guessed when not given.
+    If quantity or unit_price cannot be found, the error includes a suggested
     column mapping.
     """
     df = await _read_csv_upload(file)
     confirmed = _parse_mapping(mapping)
     if confirmed is not None:
         try:
-            df = apply_column_mapping(df, confirmed)
+            apply_column_mapping(df, confirmed)  # report a wrong mapping first
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-
-    removed_count = 0
-    if remove_duplicates:
-        df, removed = remove_duplicate_rows(df)
-        removed_count = len(removed)
-    try:
-        summary = revenue_summary(df)
-        by_product = revenue_by_product(df)
-    except ValueError as error:
+    used_mapping = confirmed or {
+        f: f for f in STANDARD_FIELDS if f in map(str, df.columns)
+    }
+    if "quantity" not in used_mapping or "unit_price" not in used_mapping:
         raise HTTPException(
             status_code=400,
             detail={
-                "message": str(error),
+                "message": "Missing required columns: quantity and unit_price. "
+                "Apply the column mapping first.",
                 "suggested_mapping": suggest_column_mapping(df),
             },
-        ) from error
-    return {
-        "mapping_applied": confirmed or {},
-        "duplicates_removed": removed_count,
-        "summary": summary,
-        "by_product": _records(by_product),
-        "by_month": _monthly_or_none(df),
-    }
-
-
-def _monthly_or_none(df: pd.DataFrame) -> dict | None:
-    """Return the monthly trend and a next-month forecast if the data has an
-    order_date column, else None. If forecasting is not possible (for example,
-    too few months), the forecast explains why instead of failing the request.
-    """
-    if "order_date" not in df.columns:
-        return None
+        )
+    options = PipelineOptions(
+        mapping=used_mapping,
+        fix_text=fix_text,
+        remove_duplicates=remove_duplicates,
+        excluded_statuses=_parse_status_list(excluded_statuses),
+        leave_out_future=leave_out_future,
+        discount_type=discount_type,
+    )
     try:
-        dated = convert_date_columns(df, ["order_date"])
+        result = run_pipeline(df, options)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    monthly, undated = revenue_by_month(dated)
-    try:
-        forecast = {"available": True, **forecast_next_month(monthly)}
-    except ValueError as error:
-        forecast = {"available": False, "reason": str(error)}
+
+    by_month = None
+    if result.monthly is not None:
+        by_month = {
+            "months": _records(result.monthly),
+            "undated_rows": result.undated_rows,
+            "yearly": _records(result.yearly),
+            "forecast": result.forecast,
+        }
     return {
-        "months": _records(monthly),
-        "undated_rows": undated,
-        "forecast": forecast,
+        "mapping_applied": confirmed or {},
+        "duplicates_removed": result.duplicates_removed,
+        "text_values_fixed": (
+            int(result.text_merges["rows_changed"].sum())
+            if not result.text_merges.empty
+            else 0
+        ),
+        "excluded_statuses": result.excluded_statuses,
+        "status_excluded": result.status_excluded,
+        "future_left_out": result.future_left_out,
+        "gross_total": result.gross_total,
+        "discount": result.discount,
+        "summary": result.summary,
+        "kpis": result.kpis,
+        "reconciliation": result.reconciliation,
+        "checks": result.checks,
+        "by_product": (
+            _records(result.by_product) if result.by_product is not None else None
+        ),
+        "by_month": by_month,
     }
