@@ -24,6 +24,7 @@ STANDARD_FIELDS: dict[str, set[str]] = {
     "quantity": {"quantity", "qty", "units", "units sold", "quantity sold"},
     "unit_price": {"unit price", "price", "rate", "selling price"},
     "order_status": {"order status", "status", "order state"},
+    "discount": {"discount", "discount amount", "discount percent", "disc"},
 }
 
 

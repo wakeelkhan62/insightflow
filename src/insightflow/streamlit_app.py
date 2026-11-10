@@ -17,6 +17,7 @@ from insightflow.cleaning import (
     standardize_text_values,
     suggest_excluded_statuses,
 )
+from insightflow.discounts import DISCOUNT_TYPES, apply_discount, guess_discount_type
 from insightflow.forecasting import forecast_next_month
 from insightflow.ingestion import load_csv
 from insightflow.mapping import (
@@ -155,11 +156,52 @@ if "order_date" in data.columns:
         if leave_out_future:
             data, future_count = kept, len(future)
 
+# Discounts: net revenue = what customers actually paid for the goods
+discount_report = None
+if "discount" in data.columns:
+    labels = {
+        "fraction": "Fraction (0.10 means 10%)",
+        "percent": "Percent (10 means 10%)",
+        "amount": "Money off the order line (500 means Rs 500)",
+    }
+    guess = guess_discount_type(data) or "fraction"
+    discount_type = st.selectbox(
+        "How is the discount written in your file?",
+        DISCOUNT_TYPES,
+        index=DISCOUNT_TYPES.index(guess),
+        format_func=labels.get,
+        help="We guessed from the values. Values up to 100 could be a percent or "
+        "a small amount, so please check.",
+    )
+    gross_total = revenue_summary(data)["total_revenue"]
+    try:
+        data, discount_report = apply_discount(data, discount_type)
+    except ValueError as error:
+        st.error(str(error))
+        st.stop()
+    if discount_report["invalid_discount_rows"]:
+        st.warning(
+            f"{discount_report['invalid_discount_rows']:,} rows have an impossible "
+            "discount and are left out of revenue."
+        )
+    if discount_report["blank_discount_rows"]:
+        st.caption(
+            f"{discount_report['blank_discount_rows']:,} rows have no discount "
+            "value and are counted as no discount."
+        )
+
 # 3. Revenue summary
 st.subheader("Revenue")
 summary = revenue_summary(data)
+if discount_report:
+    d1, d2, _ = st.columns(3)
+    d1.metric("Gross sales (before discounts)", money(gross_total))
+    d2.metric("Discounts given", money(discount_report["total_discount"]))
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Total revenue", money(summary["total_revenue"]))
+m1.metric(
+    "Net revenue" if discount_report else "Total revenue",
+    money(summary["total_revenue"]),
+)
 m2.metric("Rows used", f"{summary['rows_included']:,}")
 m3.metric("Missing qty/price", f"{summary['rows_excluded']:,}")
 m4.metric("Duplicates removed", f"{removed_count:,}")
@@ -170,6 +212,8 @@ if summary["rows_excluded"]:
         f"{summary['rows_excluded']:,} rows were left out because quantity or price "
         "is missing, so actual revenue is higher than shown."
     )
+elif discount_report:
+    st.caption("Net revenue = quantity x unit price, after discounts, before tax.")
 else:
     st.caption("Revenue = quantity x unit price (gross, before discounts).")
 
