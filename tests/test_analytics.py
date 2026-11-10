@@ -97,3 +97,19 @@ def test_revenue_by_month_requires_converted_dates():
 
     with pytest.raises(ValueError, match="Convert it first"):
         revenue_by_month(df)
+
+
+def test_money_is_rounded_to_two_decimals():
+    """0.1 + 0.2 must be 0.3 in a money report, not 0.30000000000000004."""
+    df = pd.DataFrame(
+        {
+            "order_date": pd.to_datetime(["2026-01-05", "2026-01-06"]),
+            "product": pd.array(["Pen", "Pen"], dtype="string"),
+            "quantity": pd.array([1, 1], dtype="Int64"),
+            "unit_price": pd.array([0.1, 0.2], dtype="Float64"),
+        }
+    )
+
+    assert revenue_summary(df)["total_revenue"] == 0.3
+    assert revenue_by_product(df)["revenue"].iloc[0] == 0.3
+    assert revenue_by_month(df)[0]["revenue"].iloc[0] == 0.3

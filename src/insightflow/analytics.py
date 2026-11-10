@@ -2,6 +2,7 @@ import pandas as pd
 from pandas.api import types as ptypes
 
 REQUIRED_FOR_REVENUE = ["quantity", "unit_price"]
+MONEY_DECIMALS = 2
 
 
 def _require_columns(df: pd.DataFrame, columns: list[str]) -> None:
@@ -16,12 +17,13 @@ def _require_columns(df: pd.DataFrame, columns: list[str]) -> None:
 def add_revenue(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of df with a revenue column (quantity x unit_price).
 
-    Rows with a missing quantity or price get a missing revenue, never 0.
-    The input DataFrame is not changed.
+    Revenue is rounded to 2 decimals. Rows with a missing quantity or price get
+    a missing revenue, never 0. The input DataFrame is not changed.
     """
     _require_columns(df, REQUIRED_FOR_REVENUE)
     result = df.copy()
-    result["revenue"] = result["quantity"] * result["unit_price"]
+    revenue = result["quantity"] * result["unit_price"]
+    result["revenue"] = revenue.round(MONEY_DECIMALS)
     return result
 
 
@@ -35,7 +37,7 @@ def revenue_summary(df: pd.DataFrame) -> dict:
     included = revenue.notna()
     total = revenue[included].sum()
     return {
-        "total_revenue": float(total),
+        "total_revenue": round(float(total), MONEY_DECIMALS),
         "rows_included": int(included.sum()),
         "rows_excluded": int((~included).sum()),
     }
@@ -55,6 +57,7 @@ def revenue_by_product(df: pd.DataFrame) -> pd.DataFrame:
         rows_included=("included", "sum"),
         rows_excluded=("included", lambda i: (~i).sum()),
     )
+    summary["revenue"] = summary["revenue"].round(MONEY_DECIMALS)
     summary = summary.sort_values("revenue", ascending=False, na_position="last")
     return summary.reset_index()
 
@@ -90,6 +93,7 @@ def revenue_by_month(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         monthly["rows_included"] = monthly["rows_included"].fillna(0).astype(int)
         monthly["rows_excluded"] = monthly["rows_excluded"].fillna(0).astype(int)
         monthly.loc[empty_month, "revenue"] = 0
+        monthly["revenue"] = monthly["revenue"].round(MONEY_DECIMALS)
 
     monthly.index = monthly.index.astype(str)
     return monthly.rename_axis("month").reset_index(), undated
