@@ -71,3 +71,59 @@ def test_unknown_key_column_returns_400():
 
     assert response.status_code == 400
     assert "orderid" in response.json()["detail"]
+
+
+REVENUE_CSV = (
+    b"order_id,product,quantity,unit_price\n"
+    b"1,Laptop,2,85000\n"
+    b"1,Laptop,2,85000\n"
+    b"2,Mouse,5,1500\n"
+    b"3,Keyboard,,3000\n"
+)
+
+
+def _upload_revenue(content: bytes, **params):
+    files = {"file": ("sales.csv", content, "text/csv")}
+    return client.post("/datasets/revenue", files=files, params=params)
+
+
+def test_revenue_endpoint_removes_duplicates_and_returns_evidence():
+    """Duplicates are removed and counted; totals come with included/excluded rows."""
+    response = _upload_revenue(REVENUE_CSV)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["duplicates_removed"] == 1
+    assert body["summary"] == {
+        "total_revenue": 177500.0,
+        "rows_included": 2,
+        "rows_excluded": 1,
+    }
+    assert body["by_product"][0] == {
+        "product": "Laptop",
+        "revenue": 170000,
+        "rows_included": 1,
+        "rows_excluded": 0,
+    }
+    assert body["by_product"][2]["revenue"] is None
+
+
+def test_revenue_endpoint_can_keep_duplicates():
+    """With remove_duplicates=false, the copied row is counted again."""
+    response = _upload_revenue(REVENUE_CSV, remove_duplicates=False)
+
+    assert response.json()["summary"]["total_revenue"] == 347500.0
+
+
+def test_revenue_endpoint_suggests_mapping_when_columns_differ():
+    """Non-standard column names give a 400 with a suggested mapping."""
+    content = b"Item,Qty,Rate (PKR)\nLaptop,2,85000\n"
+
+    response = _upload_revenue(content)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["suggested_mapping"] == {
+        "product": "Item",
+        "quantity": "Qty",
+        "unit_price": "Rate (PKR)",
+    }
