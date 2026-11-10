@@ -1,3 +1,4 @@
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from insightflow import api
@@ -198,3 +199,26 @@ def test_revenue_endpoint_reports_invalid_dates():
 
     assert response.status_code == 400
     assert "not valid dates" in response.json()["detail"]
+
+
+def test_revenue_endpoint_forecasts_next_month_with_enough_history():
+    """With 15+ months of data, the monthly section includes a forecast."""
+    months = pd.period_range("2024-01", periods=15, freq="M")
+    rows = "".join(f"{m}-10,Pen,1,100\n" for m in months)
+    content = ("order_date,product,quantity,unit_price\n" + rows).encode()
+
+    forecast = _upload_revenue(content).json()["by_month"]["forecast"]
+
+    assert forecast["available"] is True
+    assert forecast["month"] == "2025-04"
+    assert forecast["forecast"] == 100
+
+
+def test_revenue_endpoint_explains_when_forecast_is_not_possible():
+    """With only a few months, the forecast says why instead of failing."""
+    content = b"order_date,product,quantity,unit_price\n2026-01-05,Pen,1,100\n"
+
+    forecast = _upload_revenue(content).json()["by_month"]["forecast"]
+
+    assert forecast["available"] is False
+    assert "Need at least" in forecast["reason"]
