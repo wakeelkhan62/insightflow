@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 import pytest
 from pandas.api import types as ptypes
@@ -7,6 +9,8 @@ from insightflow.cleaning import (
     fill_missing_values,
     remove_duplicate_rows,
     split_by_order_status,
+    split_future_dates,
+    standardize_text_values,
     suggest_excluded_statuses,
     suggest_fill_strategies,
 )
@@ -225,3 +229,57 @@ def test_no_status_column_means_no_suggestions_and_a_clear_error():
     assert suggest_excluded_statuses(df) == []
     with pytest.raises(ValueError, match="order_status"):
         split_by_order_status(df, ["Cancelled"])
+
+
+def test_split_future_dates_keeps_past_and_undated_rows():
+    """Orders dated after today are separated; past and missing dates are kept."""
+    df = pd.DataFrame(
+        {
+            "order_id": [1, 2, 3, 4],
+            "order_date": ["2026-11-10", "2027-03-15", None, "2025-01-01"],
+        }
+    )
+
+    kept, future = split_future_dates(df, today=date(2026, 11, 10))
+
+    assert list(kept["order_id"]) == [1, 3, 4]
+    assert list(future["order_id"]) == [2]
+    assert len(df) == 4
+
+
+def test_standardize_merges_spellings_into_the_most_common_one():
+    """Case and spacing differences are merged; every merge is recorded."""
+    df = pd.DataFrame(
+        {
+            "order_id": ["inv-1", "INV-1", "inv-2", "inv-3", "inv-4"],
+            "status": pd.array(
+                ["Cancelled", "CANCELLED", "cancelled ", "Cancelled", None],
+                dtype="string",
+            ),
+            "city": pd.array(
+                ["Lahore", "lahore", "Lahore", "  Karachi", "Karachi"],
+                dtype="string",
+            ),
+        }
+    )
+
+    result, merges = standardize_text_values(df)
+
+    assert list(result["status"].iloc[:4]) == ["Cancelled"] * 4
+    assert pd.isna(result["status"].iloc[4])
+    assert list(result["city"]) == ["Lahore", "Lahore", "Lahore", "Karachi", "Karachi"]
+    assert list(result["order_id"]) == list(df["order_id"])
+    status = merges[merges["column"] == "status"].iloc[0]
+    assert status["merged_spellings"] == ["CANCELLED", "cancelled "]
+    assert status["rows_changed"] == 2
+    assert df["status"].iloc[1] == "CANCELLED"
+
+
+def test_standardize_on_clean_text_changes_nothing():
+    """Already consistent text produces no merges."""
+    df = pd.DataFrame({"city": pd.array(["Lahore", "Karachi"], dtype="string")})
+
+    result, merges = standardize_text_values(df)
+
+    assert list(result["city"]) == ["Lahore", "Karachi"]
+    assert merges.empty

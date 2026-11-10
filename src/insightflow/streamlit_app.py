@@ -9,7 +9,12 @@ import pandas as pd
 import streamlit as st
 
 from insightflow.analytics import revenue_by_month, revenue_by_product, revenue_summary
-from insightflow.cleaning import convert_date_columns, remove_duplicate_rows
+from insightflow.cleaning import (
+    convert_date_columns,
+    remove_duplicate_rows,
+    split_by_order_status,
+    suggest_excluded_statuses,
+)
 from insightflow.forecasting import forecast_next_month
 from insightflow.ingestion import load_csv
 from insightflow.mapping import (
@@ -95,21 +100,37 @@ if remove_duplicates:
     data, removed = remove_duplicate_rows(data)
     removed_count = len(removed)
 
+# Order status: leave out orders that brought in no money (user decides which)
+status_excluded_count = 0
+if "order_status" in data.columns:
+    statuses = sorted(data["order_status"].dropna().astype(str).unique())
+    chosen = st.multiselect(
+        "Order statuses to leave out of revenue",
+        statuses,
+        default=suggest_excluded_statuses(data),
+        help="Cancelled or returned orders usually brought in no money.",
+    )
+    data, status_excluded = split_by_order_status(data, chosen)
+    status_excluded_count = len(status_excluded)
+else:
+    st.caption("No order status column mapped, so every order counts as revenue.")
+
 # 3. Revenue summary
 st.subheader("Revenue")
 summary = revenue_summary(data)
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Total revenue", money(summary["total_revenue"]))
 m2.metric("Rows used", f"{summary['rows_included']:,}")
-m3.metric("Rows excluded", f"{summary['rows_excluded']:,}")
+m3.metric("Missing qty/price", f"{summary['rows_excluded']:,}")
 m4.metric("Duplicates removed", f"{removed_count:,}")
+m5.metric("Left out by status", f"{status_excluded_count:,}")
 if summary["rows_excluded"]:
     st.caption(
         f"{summary['rows_excluded']:,} rows were left out because quantity or price "
         "is missing, so actual revenue is higher than shown."
     )
 else:
-    st.caption("Revenue = quantity x unit price (gross, before discounts and returns).")
+    st.caption("Revenue = quantity x unit price (gross, before discounts).")
 
 # 4. Monthly trend and forecast
 if "order_date" in data.columns:

@@ -51,20 +51,38 @@ def _check_future_dates(df: pd.DataFrame, today: date) -> dict:
     return _result(name, f"order_date after {today.isoformat()}", mask)
 
 
+def _outlier_mask(values: pd.Series) -> pd.Series:
+    """Flag values far outside the middle 50% (IQR rule) of their own group."""
+    numbers = values.astype(float)
+    if numbers.notna().sum() < MIN_ROWS_FOR_OUTLIERS:
+        return pd.Series(False, index=values.index)
+    q1, q3 = numbers.quantile(0.25), numbers.quantile(0.75)
+    spread = OUTLIER_FACTOR * (q3 - q1)
+    return ((numbers < q1 - spread) | (numbers > q3 + spread)).fillna(False)
+
+
 def _check_outliers(df: pd.DataFrame, column: str) -> dict:
+    """Flag extreme values, compared within each product when possible.
+
+    A Rs 185,000 laptop is normal for laptops but extreme next to a Rs 1,200
+    phone stand, so prices are compared per product when a product column
+    exists. Groups with fewer than MIN_ROWS_FOR_OUTLIERS values are not judged.
+    """
     name = f"{column}_extreme_value"
     if column not in df.columns:
         return _skipped(name, f"No {column} column")
     if not ptypes.is_numeric_dtype(df[column]):
         return _skipped(name, f"{column} is not numeric")
-    values = df[column].dropna().astype(float)
-    if len(values) < MIN_ROWS_FOR_OUTLIERS:
+    if df[column].notna().sum() < MIN_ROWS_FOR_OUTLIERS:
         return _skipped(name, f"Fewer than {MIN_ROWS_FOR_OUTLIERS} values")
-    q1, q3 = values.quantile(0.25), values.quantile(0.75)
-    spread = OUTLIER_FACTOR * (q3 - q1)
-    low, high = q1 - spread, q3 + spread
-    mask = ((df[column] < low) | (df[column] > high)).fillna(False).astype(bool)
-    return _result(name, f"{column} outside {low:,.2f} to {high:,.2f}", mask)
+    if "product" in df.columns:
+        groups = df.groupby("product", dropna=False)[column]
+        mask = groups.transform(_outlier_mask).astype(bool)
+        rule = f"{column} far outside the usual range for that product"
+    else:
+        mask = _outlier_mask(df[column]).astype(bool)
+        rule = f"{column} far outside the usual range"
+    return _result(name, rule, mask)
 
 
 def validate_sales(df: pd.DataFrame, today: date | None = None) -> dict:

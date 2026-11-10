@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 from pandas.api import types as ptypes
 
@@ -199,3 +201,75 @@ def split_by_order_status(
     is_excluded = _normalized_status(df["order_status"]).isin(targets)
     is_excluded = is_excluded.fillna(False).astype(bool)
     return df[~is_excluded].copy(), df[is_excluded].copy()
+
+
+def split_future_dates(
+    df: pd.DataFrame, today: date | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (kept, future): rows dated up to today, and rows dated after it.
+
+    A sale cannot happen in the future, so these are almost always typing
+    errors; one of them would stretch a monthly trend into empty future months.
+    Rows without a readable date are kept. The input is not changed.
+    """
+    if "order_date" not in df.columns:
+        raise ValueError("No order_date column. Map the date column first.")
+    today = today or date.today()
+    dates = pd.to_datetime(df["order_date"], errors="coerce", format="ISO8601")
+    is_future = (dates > pd.Timestamp(today)).fillna(False).astype(bool)
+    return df[~is_future].copy(), df[is_future].copy()
+
+
+def _text_columns_to_standardize(df: pd.DataFrame) -> list[str]:
+    """Text columns that hold categories: not IDs and not dates."""
+    text_dates = set(detect_date_columns(df))
+    return [
+        str(column)
+        for column in df.columns
+        if (ptypes.is_string_dtype(df[column]) or ptypes.is_object_dtype(df[column]))
+        and not _looks_like_id(str(column))
+        and str(column) not in text_dates
+    ]
+
+
+def standardize_text_values(
+    df: pd.DataFrame, columns: list[str] | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (standardized, merges): text with consistent spelling, and a record.
+
+    Extra spaces are removed, and values that differ only in capitals
+    ("CANCELLED", "cancelled ", "Cancelled") become the most common spelling
+    in the file (alphabetical order breaks ties). By default every text column
+    except IDs and dates is processed. merges lists each standard value that
+    absorbed other spellings. Missing values stay missing. The input is not
+    changed.
+    """
+    columns = _text_columns_to_standardize(df) if columns is None else columns
+    result = df.copy()
+    records = []
+    for column in columns:
+        original = df[column].astype("string")
+        trimmed = original.str.strip().str.replace(r"\s+", " ", regex=True)
+        key = trimmed.str.casefold()
+        rows = pd.DataFrame({"key": key, "value": trimmed, "original": original})
+        rows = rows.dropna(subset=["key"])
+        counts = rows.groupby(["key", "value"]).size().reset_index(name="n")
+        counts = counts.sort_values(
+            ["key", "n", "value"], ascending=[True, False, True]
+        )
+        standard = counts.drop_duplicates("key").set_index("key")["value"]
+        result[column] = key.map(standard).astype("string")
+
+        rows["standard"] = rows["key"].map(standard)
+        changed = rows[rows["original"] != rows["standard"]]
+        for value, group in changed.groupby("standard"):
+            records.append(
+                {
+                    "column": column,
+                    "standard_value": value,
+                    "merged_spellings": sorted(group["original"].unique()),
+                    "rows_changed": len(group),
+                }
+            )
+    merge_columns = ["column", "standard_value", "merged_spellings", "rows_changed"]
+    return result, pd.DataFrame(records, columns=merge_columns)

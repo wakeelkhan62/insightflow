@@ -69,3 +69,23 @@ def test_input_is_not_changed():
     validate_sales(df, today=TODAY)
 
     pd.testing.assert_frame_equal(df, before)
+
+
+def test_extreme_values_are_judged_within_each_product():
+    """Expensive products are not outliers just because other products are cheap."""
+    laptops = [185000, 180000, 190000, 182000, 188000, 184000, 186000, 181000]
+    stands = [1200, 1150, 1250, 1180, 1220, 1210, 1190, 1230]
+    df = pd.DataFrame(
+        {
+            "product": ["Laptop"] * 10 + ["Stand"] * 10,
+            "unit_price": pd.array(
+                laptops + [183000, 9999999] + stands + [1240, 1170], dtype="Int64"
+            ),
+        }
+    )
+
+    report = validate_sales(df, today=TODAY)
+
+    extreme = _check(report, "unit_price_extreme_value")
+    assert extreme["rows_flagged"] == 1
+    assert extreme["example_file_lines"] == [11]
