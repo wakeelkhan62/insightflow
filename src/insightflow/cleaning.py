@@ -150,3 +150,52 @@ def suggest_fill_strategies(
         else:
             suggestions[name] = "unknown"
     return suggestions
+
+
+NON_REVENUE_STATUSES = frozenset(
+    {
+        "cancelled",
+        "canceled",
+        "returned",
+        "refunded",
+        "failed",
+        "rejected",
+        "declined",
+        "void",
+        "voided",
+    }
+)
+
+
+def _normalized_status(series: pd.Series) -> pd.Series:
+    """Lower-case and trim status text so 'Cancelled ' matches 'cancelled'."""
+    return series.astype("string").str.strip().str.lower()
+
+
+def suggest_excluded_statuses(df: pd.DataFrame) -> list[str]:
+    """Return the statuses in df that usually mean no money was received.
+
+    Uses the exact spelling found in the data, e.g. ["Cancelled", "Returned"].
+    Returns [] if there is no order_status column. Nothing is changed.
+    """
+    if "order_status" not in df.columns:
+        return []
+    statuses = df["order_status"].dropna().astype("string").unique()
+    found = [s for s in statuses if s.strip().lower() in NON_REVENUE_STATUSES]
+    return sorted(found)
+
+
+def split_by_order_status(
+    df: pd.DataFrame, excluded_statuses: list[str]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (kept, excluded): rows to count as revenue, and rows left out.
+
+    excluded_statuses is the list the user approved; matching ignores case and
+    surrounding spaces. Rows with no status are kept. The input is not changed.
+    """
+    if "order_status" not in df.columns:
+        raise ValueError("No order_status column. Map the status column first.")
+    targets = {status.strip().lower() for status in excluded_statuses}
+    is_excluded = _normalized_status(df["order_status"]).isin(targets)
+    is_excluded = is_excluded.fillna(False).astype(bool)
+    return df[~is_excluded].copy(), df[is_excluded].copy()

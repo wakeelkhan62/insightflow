@@ -6,6 +6,8 @@ from insightflow.cleaning import (
     convert_date_columns,
     fill_missing_values,
     remove_duplicate_rows,
+    split_by_order_status,
+    suggest_excluded_statuses,
     suggest_fill_strategies,
 )
 
@@ -183,3 +185,43 @@ def test_suggests_a_safe_strategy_for_each_column_with_gaps():
         "city": "unknown",
         "discount": "too_many_missing",
     }
+
+
+def _orders_with_status() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "order_id": [1, 2, 3, 4, 5],
+            "order_status": pd.array(
+                ["Delivered", "Cancelled ", "RETURNED", None, "Shipped"],
+                dtype="string",
+            ),
+        }
+    )
+
+
+def test_suggests_non_revenue_statuses_using_the_files_own_spelling():
+    """Cancelled and returned are suggested; delivered and shipped are not."""
+    assert suggest_excluded_statuses(_orders_with_status()) == [
+        "Cancelled ",
+        "RETURNED",
+    ]
+
+
+def test_split_by_order_status_ignores_case_and_keeps_rows_without_status():
+    """Approved statuses are excluded; a missing status is kept and counted."""
+    df = _orders_with_status()
+
+    kept, excluded = split_by_order_status(df, ["cancelled", "Returned"])
+
+    assert list(kept["order_id"]) == [1, 4, 5]
+    assert list(excluded["order_id"]) == [2, 3]
+    assert len(df) == 5
+
+
+def test_no_status_column_means_no_suggestions_and_a_clear_error():
+    """Files without a status column still work; splitting explains why not."""
+    df = pd.DataFrame({"order_id": [1]})
+
+    assert suggest_excluded_statuses(df) == []
+    with pytest.raises(ValueError, match="order_status"):
+        split_by_order_status(df, ["Cancelled"])
