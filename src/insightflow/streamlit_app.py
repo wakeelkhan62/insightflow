@@ -1,6 +1,9 @@
 """InsightFlow AI web app.
 
 Run with: uv run streamlit run src/insightflow/streamlit_app.py
+
+All cleaning and calculations happen in insightflow.pipeline; this file only
+asks the user for their choices and shows the results.
 """
 
 import io
@@ -8,36 +11,20 @@ import io
 import pandas as pd
 import streamlit as st
 
-from insightflow.analytics import (
-    order_kpis,
-    revenue_by,
-    revenue_by_month,
-    revenue_by_year,
-    revenue_concentration,
-    revenue_summary,
-)
-from insightflow.cleaning import (
-    convert_date_columns,
-    remove_duplicate_rows,
-    split_by_order_status,
-    split_future_dates,
-    standardize_text_values,
-    suggest_excluded_statuses,
-)
-from insightflow.discounts import DISCOUNT_TYPES, apply_discount, guess_discount_type
-from insightflow.forecasting import forecast_next_month
+from insightflow.analytics import revenue_by, revenue_concentration
+from insightflow.discounts import DISCOUNT_TYPES
 from insightflow.ingestion import load_csv
-from insightflow.mapping import (
-    STANDARD_FIELDS,
-    apply_column_mapping,
-    suggest_column_mapping,
-)
+from insightflow.mapping import STANDARD_FIELDS, suggest_column_mapping
+from insightflow.pipeline import PipelineOptions, preview_choices, run_pipeline
 from insightflow.quality import build_quality_report
-from insightflow.reconciliation import reconcile_totals
-from insightflow.validation import validate_sales
 
 MAX_UPLOAD_MB = 50
 NOT_IN_FILE = "(not in my file)"
+DISCOUNT_LABELS = {
+    "fraction": "Fraction (0.10 means 10%)",
+    "percent": "Percent (10 means 10%)",
+    "amount": "Money off the order line (500 means Rs 500)",
+}
 
 
 @st.cache_data
@@ -54,11 +41,11 @@ st.set_page_config(page_title="InsightFlow AI", layout="wide")
 st.title("InsightFlow AI")
 st.caption("Upload sales data, confirm the columns, and get revenue with evidence.")
 
+# 1. Upload
 uploaded = st.file_uploader("Upload a CSV file", type="csv")
 if uploaded is None:
     st.info("Choose a CSV file to start.")
     st.stop()
-
 content = uploaded.getvalue()
 if len(content) > MAX_UPLOAD_MB * 1024 * 1024:
     st.error(f"File is larger than the {MAX_UPLOAD_MB} MB limit.")
@@ -69,7 +56,6 @@ except (pd.errors.ParserError, UnicodeDecodeError, ValueError):
     st.error("The file could not be read as CSV.")
     st.stop()
 
-# 1. Data quality
 report = build_quality_report(df)
 with st.expander("Data quality report", expanded=False):
     c1, c2, c3 = st.columns(3)
@@ -85,7 +71,7 @@ with st.expander("Data quality report", expanded=False):
     )
     st.dataframe(quality, hide_index=True, width="stretch")
 
-# 2. Column mapping: suggested automatically, confirmed by the user
+# 2. The user's choices
 st.subheader("Confirm your columns")
 st.caption("We guessed which column is which. Change any that are wrong.")
 suggested = suggest_column_mapping(df)
@@ -93,8 +79,7 @@ options = [NOT_IN_FILE, *map(str, df.columns)]
 mapping: dict[str, str] = {}
 fields = list(STANDARD_FIELDS)
 for start in range(0, len(fields), 5):  # 5 dropdowns per row
-    row_fields = fields[start : start + 5]
-    for box, field in zip(st.columns(5), row_fields, strict=False):
+    for box, field in zip(st.columns(5), fields[start : start + 5], strict=False):
         default = suggested.get(field, NOT_IN_FILE)
         choice = box.selectbox(field, options, index=options.index(default), key=field)
         if choice != NOT_IN_FILE:
@@ -108,126 +93,105 @@ if "quantity" not in mapping or "unit_price" not in mapping:
     st.warning("Choose the quantity and unit_price columns to calculate revenue.")
     st.stop()
 try:
-    data = apply_column_mapping(df, mapping)
+    preview = preview_choices(df, mapping, fix_text=fix_text)
 except ValueError as error:
     st.error(str(error))
     st.stop()
 
-# Text standardization: "CANCELLED", "cancelled " and "Cancelled" become one value
-if fix_text:
-    data, merges = standardize_text_values(data)
-    if not merges.empty:
-        with st.expander(f"Text fixed: {int(merges['rows_changed'].sum()):,} values"):
-            st.dataframe(merges, hide_index=True, width="stretch")
+excluded_statuses = None
+if preview["statuses"]:
+    excluded_statuses = st.multiselect(
+        "Order statuses to leave out of revenue",
+        preview["statuses"],
+        default=preview["suggested_statuses"],
+        help="Cancelled or returned orders usually brought in no money.",
+    )
+leave_out_future = True
+if preview["future_rows"]:
+    leave_out_future = st.checkbox(
+        f"Leave out {preview['future_rows']:,} orders dated in the future",
+        value=True,
+        help="A sale cannot happen after today; these are almost always typos.",
+    )
+discount_type = None
+if "discount" in mapping:
+    guess = preview["discount_guess"] or "fraction"
+    discount_type = st.selectbox(
+        "How is the discount written in your file?",
+        DISCOUNT_TYPES,
+        index=DISCOUNT_TYPES.index(guess),
+        format_func=DISCOUNT_LABELS.get,
+        help="We guessed from the values. Values up to 100 could be a percent or "
+        "a small amount, so please check.",
+    )
 
-# Business rule checks: flag problems, the user decides what to do
-checks = validate_sales(data)
-problems = [c for c in checks["checks"] if c["rows_flagged"]]
+# 3. Run every step with the user's choices
+try:
+    result = run_pipeline(
+        df,
+        PipelineOptions(
+            mapping=mapping,
+            fix_text=fix_text,
+            remove_duplicates=remove_duplicates,
+            excluded_statuses=excluded_statuses,
+            leave_out_future=leave_out_future,
+            discount_type=discount_type,
+        ),
+    )
+except ValueError as error:
+    st.error(str(error))
+    st.stop()
+
+if not result.text_merges.empty:
+    fixed = int(result.text_merges["rows_changed"].sum())
+    with st.expander(f"Text fixed: {fixed:,} values"):
+        st.dataframe(result.text_merges, hide_index=True, width="stretch")
+problems = [c for c in result.checks["checks"] if c["rows_flagged"]]
 with st.expander(f"Data checks ({len(problems)} problem types found)"):
     if problems:
         st.dataframe(pd.DataFrame(problems), hide_index=True, width="stretch")
     else:
         st.write("No problems found by the business rules.")
-    if checks["skipped"]:
+    if result.checks["skipped"]:
         st.caption(
             "Not checked: "
-            + "; ".join(f"{s['name']} ({s['reason']})" for s in checks["skipped"])
+            + "; ".join(
+                f"{s['name']} ({s['reason']})" for s in result.checks["skipped"]
+            )
         )
-
-removed_count = 0
-if remove_duplicates:
-    data, removed = remove_duplicate_rows(data)
-    removed_count = len(removed)
-
-# Order status: leave out orders that brought in no money (user decides which)
-status_excluded_count = 0
-if "order_status" in data.columns:
-    statuses = sorted(data["order_status"].dropna().astype(str).unique())
-    chosen = st.multiselect(
-        "Order statuses to leave out of revenue",
-        statuses,
-        default=suggest_excluded_statuses(data),
-        help="Cancelled or returned orders usually brought in no money.",
+if result.discount and result.discount["invalid_discount_rows"]:
+    st.warning(
+        f"{result.discount['invalid_discount_rows']:,} rows have an impossible "
+        "discount and are left out of revenue."
     )
-    data, status_excluded = split_by_order_status(data, chosen)
-    status_excluded_count = len(status_excluded)
-else:
-    st.caption("No order status column mapped, so every order counts as revenue.")
 
-# Future dates: a sale cannot happen after today, so these are almost always typos
-future_count = 0
-if "order_date" in data.columns:
-    kept, future = split_future_dates(data)
-    if len(future):
-        leave_out_future = st.checkbox(
-            f"Leave out {len(future):,} orders dated in the future",
-            value=True,
-            help="They would stretch the monthly chart into empty future months.",
-        )
-        if leave_out_future:
-            data, future_count = kept, len(future)
-
-# Discounts: net revenue = what customers actually paid for the goods
-discount_report = None
-if "discount" in data.columns:
-    labels = {
-        "fraction": "Fraction (0.10 means 10%)",
-        "percent": "Percent (10 means 10%)",
-        "amount": "Money off the order line (500 means Rs 500)",
-    }
-    guess = guess_discount_type(data) or "fraction"
-    discount_type = st.selectbox(
-        "How is the discount written in your file?",
-        DISCOUNT_TYPES,
-        index=DISCOUNT_TYPES.index(guess),
-        format_func=labels.get,
-        help="We guessed from the values. Values up to 100 could be a percent or "
-        "a small amount, so please check.",
-    )
-    gross_total = revenue_summary(data)["total_revenue"]
-    try:
-        data, discount_report = apply_discount(data, discount_type)
-    except ValueError as error:
-        st.error(str(error))
-        st.stop()
-    if discount_report["invalid_discount_rows"]:
-        st.warning(
-            f"{discount_report['invalid_discount_rows']:,} rows have an impossible "
-            "discount and are left out of revenue."
-        )
-    if discount_report["blank_discount_rows"]:
-        st.caption(
-            f"{discount_report['blank_discount_rows']:,} rows have no discount "
-            "value and are counted as no discount."
-        )
-
-# 3. Revenue summary
+# 4. Revenue
 st.subheader("Revenue")
-summary = revenue_summary(data)
-if discount_report:
+summary = result.summary
+if result.discount:
     r1, r2, r3 = st.columns(3)
-    r1.metric("Gross sales (before discounts)", money(gross_total))
-    r2.metric("Discounts given", money(discount_report["total_discount"]))
+    r1.metric("Gross sales (before discounts)", money(result.gross_total))
+    r2.metric("Discounts given", money(result.discount["total_discount"]))
     r3.metric("Net revenue", money(summary["total_revenue"]))
 else:
     st.metric("Total revenue", money(summary["total_revenue"]))
 e1, e2, e3, e4, e5 = st.columns(5)
 e1.metric("Rows used", f"{summary['rows_included']:,}")
 e2.metric("Missing qty/price", f"{summary['rows_excluded']:,}")
-e3.metric("Duplicates removed", f"{removed_count:,}")
-e4.metric("Left out by status", f"{status_excluded_count:,}")
-e5.metric("Future dates left out", f"{future_count:,}")
+e3.metric("Duplicates removed", f"{result.duplicates_removed:,}")
+e4.metric("Left out by status", f"{result.status_excluded:,}")
+e5.metric("Future dates left out", f"{result.future_left_out:,}")
 if summary["rows_excluded"]:
     st.caption(
         f"{summary['rows_excluded']:,} rows were left out because quantity or price "
         "is missing, so actual revenue is higher than shown."
     )
-elif discount_report:
+elif result.discount:
     st.caption("Net revenue = quantity x unit price, after discounts, before tax.")
 else:
     st.caption("Revenue = quantity x unit price (gross, before discounts).")
 
-kpis = order_kpis(data)
+kpis = result.kpis
 if kpis["orders"]:
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Orders", f"{kpis['orders']:,}")
@@ -244,9 +208,8 @@ if kpis["orders"]:
         )
     )
 
-# Reconciliation: does our calculation reproduce the file's own total column?
-if "total_amount" in data.columns:
-    check = reconcile_totals(data)
+check = result.reconciliation
+if check:
     title = f"Check against your file's totals: {check['match_percent']}% of rows match"
     with st.expander(title):
         if check["best_formula"]:
@@ -270,38 +233,31 @@ if "total_amount" in data.columns:
             )
         )
 
-# 4. Monthly trend and forecast
-if "order_date" in data.columns:
+# 5. Monthly trend, yearly growth and forecast
+if result.monthly is not None:
     st.subheader("Monthly revenue")
-    try:
-        dated = convert_date_columns(data, ["order_date"])
-    except ValueError as error:
-        st.error(str(error))
-        st.stop()
-    monthly, undated = revenue_by_month(dated)
-    st.line_chart(monthly.set_index("month")["revenue"])
-    if undated:
-        st.caption(f"{undated:,} rows have no date and are not in the chart.")
-    yearly = revenue_by_year(monthly)
-    st.dataframe(yearly, hide_index=True)
+    st.line_chart(result.monthly.set_index("month")["revenue"])
+    if result.undated_rows:
+        st.caption(f"{result.undated_rows:,} rows have no date and are not shown.")
+    st.dataframe(result.yearly, hide_index=True)
     st.caption(
         "Growth is only shown between two complete years (12 months of data each)."
     )
-    try:
-        forecast = forecast_next_month(monthly)
-    except ValueError as error:
-        st.info(f"No forecast: {error}")
-    else:
+    forecast = result.forecast
+    if forecast["available"]:
         st.metric(f"Forecast for {forecast['month']}", money(forecast["forecast"]))
         st.caption(
             f"Method: {forecast['method'].replace('_', ' ')}. Typical error when "
             f"tested on the last 12 months: {forecast['backtest_error_percent']}%."
         )
+    else:
+        st.info(f"No forecast: {forecast['reason']}")
 else:
     st.info("Map an order_date column to see the monthly trend and forecast.")
 
-# 5. Revenue breakdown by any column (product, category, city, payment method...)
+# 6. Revenue breakdown by any column (product, category, city, payment method...)
 st.subheader("Revenue by")
+data = result.data
 skip = {"order_id", "order_date", "quantity", "unit_price", "list_price"}
 choices = [
     str(c)
