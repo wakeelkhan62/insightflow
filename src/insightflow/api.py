@@ -3,12 +3,12 @@ import json
 import os
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 
 from insightflow.analytics import revenue_by_product, revenue_summary
 from insightflow.cleaning import remove_duplicate_rows
 from insightflow.ingestion import load_csv
-from insightflow.mapping import suggest_column_mapping
+from insightflow.mapping import apply_column_mapping, suggest_column_mapping
 from insightflow.quality import build_quality_report
 
 MAX_UPLOAD_MB = int(os.getenv("INSIGHTFLOW_MAX_UPLOAD_MB", "50"))
@@ -58,15 +58,48 @@ def _records(df: pd.DataFrame) -> list[dict]:
     return json.loads(df.to_json(orient="records"))
 
 
-@app.post("/datasets/revenue")
-async def revenue(file: UploadFile, remove_duplicates: bool = True) -> dict:
-    """Upload a CSV with standard column names and get revenue with evidence.
+def _parse_mapping(mapping: str | None) -> dict[str, str] | None:
+    """Parse the user's confirmed column mapping from a JSON text form field."""
+    if mapping is None:
+        return None
+    try:
+        parsed = json.loads(mapping)
+    except json.JSONDecodeError as error:
+        raise HTTPException(
+            status_code=400, detail="mapping must be valid JSON"
+        ) from error
+    if not isinstance(parsed, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail='mapping must be an object like {"quantity": "Qty"}',
+        )
+    return parsed
 
-    Exact duplicate rows are removed only when remove_duplicates is true, and
-    the number removed is reported. If standard columns are missing, the error
-    includes a suggested column mapping.
+
+@app.post("/datasets/revenue")
+async def revenue(
+    file: UploadFile,
+    mapping: str | None = Form(None),
+    remove_duplicates: bool = True,
+) -> dict:
+    """Upload a CSV and get revenue with evidence.
+
+    mapping is an optional JSON object (standard field -> column name) that the
+    user has confirmed, e.g. {"quantity": "Qty"}. Exact duplicate rows are
+    removed only when remove_duplicates is true, and the number removed is
+    reported. If standard columns are missing, the error includes a suggested
+    column mapping.
     """
     df = await _read_csv_upload(file)
+    confirmed = _parse_mapping(mapping)
+    if confirmed is not None:
+        try:
+            df = apply_column_mapping(df, confirmed)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
     removed_count = 0
     if remove_duplicates:
         df, removed = remove_duplicate_rows(df)
@@ -83,6 +116,7 @@ async def revenue(file: UploadFile, remove_duplicates: bool = True) -> dict:
             },
         ) from error
     return {
+        "mapping_applied": confirmed or {},
         "duplicates_removed": removed_count,
         "summary": summary,
         "by_product": _records(by_product),

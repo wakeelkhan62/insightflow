@@ -127,3 +127,38 @@ def test_revenue_endpoint_suggests_mapping_when_columns_differ():
         "quantity": "Qty",
         "unit_price": "Rate (PKR)",
     }
+
+
+MAPPED_CSV = b"Item,Qty,Rate (PKR)\nLaptop,2,85000\nMouse,5,1500\n"
+MAPPING = '{"product": "Item", "quantity": "Qty", "unit_price": "Rate (PKR)"}'
+
+
+def _upload_revenue_with_mapping(content: bytes, mapping: str):
+    files = {"file": ("sales.csv", content, "text/csv")}
+    return client.post("/datasets/revenue", files=files, data={"mapping": mapping})
+
+
+def test_revenue_endpoint_applies_confirmed_mapping():
+    """With a confirmed mapping, a file with its own column names works."""
+    response = _upload_revenue_with_mapping(MAPPED_CSV, MAPPING)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["total_revenue"] == 177500.0
+    assert body["mapping_applied"]["quantity"] == "Qty"
+
+
+def test_revenue_endpoint_rejects_invalid_mapping_json():
+    """Mapping text that is not JSON gives a clear 400."""
+    response = _upload_revenue_with_mapping(MAPPED_CSV, "quantity=Qty")
+
+    assert response.status_code == 400
+    assert "valid JSON" in response.json()["detail"]
+
+
+def test_revenue_endpoint_rejects_mapping_to_missing_column():
+    """A mapping that names a column not in the file gives a clear 400."""
+    response = _upload_revenue_with_mapping(MAPPED_CSV, '{"quantity": "Units"}')
+
+    assert response.status_code == 400
+    assert "Units" in response.json()["detail"]
