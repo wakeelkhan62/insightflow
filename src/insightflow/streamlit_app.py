@@ -8,7 +8,14 @@ import io
 import pandas as pd
 import streamlit as st
 
-from insightflow.analytics import revenue_by_month, revenue_by_product, revenue_summary
+from insightflow.analytics import (
+    order_kpis,
+    revenue_by,
+    revenue_by_month,
+    revenue_by_year,
+    revenue_concentration,
+    revenue_summary,
+)
 from insightflow.cleaning import (
     convert_date_columns,
     remove_duplicate_rows,
@@ -198,19 +205,18 @@ if "discount" in data.columns:
 st.subheader("Revenue")
 summary = revenue_summary(data)
 if discount_report:
-    d1, d2, _ = st.columns(3)
-    d1.metric("Gross sales (before discounts)", money(gross_total))
-    d2.metric("Discounts given", money(discount_report["total_discount"]))
-m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric(
-    "Net revenue" if discount_report else "Total revenue",
-    money(summary["total_revenue"]),
-)
-m2.metric("Rows used", f"{summary['rows_included']:,}")
-m3.metric("Missing qty/price", f"{summary['rows_excluded']:,}")
-m4.metric("Duplicates removed", f"{removed_count:,}")
-m5.metric("Left out by status", f"{status_excluded_count:,}")
-m6.metric("Future dates left out", f"{future_count:,}")
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Gross sales (before discounts)", money(gross_total))
+    r2.metric("Discounts given", money(discount_report["total_discount"]))
+    r3.metric("Net revenue", money(summary["total_revenue"]))
+else:
+    st.metric("Total revenue", money(summary["total_revenue"]))
+e1, e2, e3, e4, e5 = st.columns(5)
+e1.metric("Rows used", f"{summary['rows_included']:,}")
+e2.metric("Missing qty/price", f"{summary['rows_excluded']:,}")
+e3.metric("Duplicates removed", f"{removed_count:,}")
+e4.metric("Left out by status", f"{status_excluded_count:,}")
+e5.metric("Future dates left out", f"{future_count:,}")
 if summary["rows_excluded"]:
     st.caption(
         f"{summary['rows_excluded']:,} rows were left out because quantity or price "
@@ -220,6 +226,23 @@ elif discount_report:
     st.caption("Net revenue = quantity x unit price, after discounts, before tax.")
 else:
     st.caption("Revenue = quantity x unit price (gross, before discounts).")
+
+kpis = order_kpis(data)
+if kpis["orders"]:
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Orders", f"{kpis['orders']:,}")
+    k2.metric("Units sold", f"{kpis['units_sold']:,.0f}")
+    k3.metric("Average order value", money(kpis["average_order_value"]))
+    k4.metric("Median order value", money(kpis["median_order_value"]))
+    st.caption(
+        "A typical order is the median. When the average is much higher, a few "
+        "very large orders are pulling it up."
+        + (
+            ""
+            if kpis["orders_counted_by"] == "order_id"
+            else " Each row is counted as one order because no order ID is mapped."
+        )
+    )
 
 # Reconciliation: does our calculation reproduce the file's own total column?
 if "total_amount" in data.columns:
@@ -259,6 +282,11 @@ if "order_date" in data.columns:
     st.line_chart(monthly.set_index("month")["revenue"])
     if undated:
         st.caption(f"{undated:,} rows have no date and are not in the chart.")
+    yearly = revenue_by_year(monthly)
+    st.dataframe(yearly, hide_index=True)
+    st.caption(
+        "Growth is only shown between two complete years (12 months of data each)."
+    )
     try:
         forecast = forecast_next_month(monthly)
     except ValueError as error:
@@ -272,9 +300,30 @@ if "order_date" in data.columns:
 else:
     st.info("Map an order_date column to see the monthly trend and forecast.")
 
-# 5. Products
-st.subheader("Top 10 products by revenue")
-if "product" in data.columns:
-    st.dataframe(revenue_by_product(data).head(10), hide_index=True, width="stretch")
+# 5. Revenue breakdown by any column (product, category, city, payment method...)
+st.subheader("Revenue by")
+skip = {"order_id", "order_date", "quantity", "unit_price", "list_price"}
+choices = [
+    str(c)
+    for c in data.columns
+    if str(c) not in skip
+    and not pd.api.types.is_numeric_dtype(data[c])
+    and 2 <= data[c].nunique() <= 100
+]
+if choices:
+    default = choices.index("product") if "product" in choices else 0
+    group_by = st.selectbox("Break revenue down by", choices, index=default)
+    breakdown = revenue_by(data, group_by)
+    st.bar_chart(
+        breakdown.head(10), x=group_by, y="revenue", horizontal=True, sort="-revenue"
+    )
+    concentration = revenue_concentration(breakdown)
+    if concentration["groups"]:
+        st.caption(
+            f"Top 1 brings {concentration['top_1_share']}% of revenue, top 3 bring "
+            f"{concentration['top_3_share']}%. {concentration['groups_for_80_percent']}"
+            f" of {concentration['groups']} together make up 80% of revenue."
+        )
+    st.dataframe(breakdown, hide_index=True, width="stretch")
 else:
-    st.info("Map a product column to see revenue by product.")
+    st.info("No text column with a manageable number of values to break down by.")

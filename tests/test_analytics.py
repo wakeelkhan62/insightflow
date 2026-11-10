@@ -3,8 +3,12 @@ import pytest
 
 from insightflow.analytics import (
     add_revenue,
+    order_kpis,
+    revenue_by,
     revenue_by_month,
     revenue_by_product,
+    revenue_by_year,
+    revenue_concentration,
     revenue_summary,
 )
 
@@ -113,3 +117,69 @@ def test_money_is_rounded_to_two_decimals():
     assert revenue_summary(df)["total_revenue"] == 0.3
     assert revenue_by_product(df)["revenue"].iloc[0] == 0.3
     assert revenue_by_month(df)[0]["revenue"].iloc[0] == 0.3
+
+
+def _shop() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "order_id": ["A", "A", "B", "C", "D"],
+            "city": pd.array(
+                ["Lahore", "Lahore", "Karachi", "Lahore", "Multan"], dtype="string"
+            ),
+            "quantity": pd.array([1, 2, 1, 1, 1], dtype="Int64"),
+            "unit_price": pd.array([100, 50, 300, 20, 30], dtype="Int64"),
+        }
+    )
+
+
+def test_revenue_by_any_column():
+    """Any column can be used for a breakdown, highest revenue first."""
+    result = revenue_by(_shop(), "city")
+
+    assert list(result["city"]) == ["Karachi", "Lahore", "Multan"]
+    assert list(result["revenue"]) == [300, 220, 30]
+
+
+def test_revenue_concentration_shows_the_80_20_picture():
+    """Top group's share, top 3 share, and how many groups make up 80%."""
+    breakdown = revenue_by(_shop(), "city")
+
+    assert revenue_concentration(breakdown) == {
+        "groups": 3,
+        "top_1_share": 54.5,
+        "top_3_share": 100.0,
+        "groups_for_80_percent": 2,
+    }
+
+
+def test_order_kpis_group_lines_into_orders_and_report_the_median():
+    """Order A has two lines (100 + 100); orders are A=200, B=300, C=20, D=30."""
+    kpis = order_kpis(_shop())
+
+    assert kpis["orders"] == 4
+    assert kpis["units_sold"] == 6
+    assert kpis["average_order_value"] == 137.5
+    assert kpis["median_order_value"] == 115.0
+    assert kpis["orders_counted_by"] == "order_id"
+
+
+def test_order_kpis_without_order_id_count_each_row():
+    kpis = order_kpis(_shop().drop(columns="order_id"))
+
+    assert kpis["orders"] == 5
+    assert kpis["orders_counted_by"] == "row"
+
+
+def test_yearly_growth_only_between_complete_years():
+    """2024 vs 2023 is compared; the partial year 2025 gets no growth figure."""
+    months = pd.period_range("2023-01", "2025-03", freq="M").astype(str)
+    revenue = [100.0] * 12 + [120.0] * 12 + [50.0] * 3
+    monthly = pd.DataFrame({"month": months, "revenue": revenue})
+
+    yearly = revenue_by_year(monthly)
+
+    assert list(yearly["year"]) == [2023, 2024, 2025]
+    assert list(yearly["revenue"]) == [1200, 1440, 150]
+    assert yearly["growth_percent"].iloc[1] == 20.0
+    assert pd.isna(yearly["growth_percent"].iloc[2])
+    assert list(yearly["complete_year"]) == [True, True, False]
