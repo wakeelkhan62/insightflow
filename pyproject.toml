@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.162.2",
     "pandas>=3.1.0",
+    "streamlit>=1.67.0",
 ]
 
 
