@@ -11,6 +11,7 @@ from insightflow.analytics import (
     revenue_summary,
 )
 from insightflow.cleaning import convert_date_columns, remove_duplicate_rows
+from insightflow.forecasting import forecast_next_month
 from insightflow.ingestion import load_csv
 from insightflow.mapping import apply_column_mapping, suggest_column_mapping
 from insightflow.quality import build_quality_report
@@ -129,7 +130,10 @@ async def revenue(
 
 
 def _monthly_or_none(df: pd.DataFrame) -> dict | None:
-    """Return the monthly trend if the data has an order_date column, else None."""
+    """Return the monthly trend and a next-month forecast if the data has an
+    order_date column, else None. If forecasting is not possible (for example,
+    too few months), the forecast explains why instead of failing the request.
+    """
     if "order_date" not in df.columns:
         return None
     try:
@@ -137,4 +141,12 @@ def _monthly_or_none(df: pd.DataFrame) -> dict | None:
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     monthly, undated = revenue_by_month(dated)
-    return {"months": _records(monthly), "undated_rows": undated}
+    try:
+        forecast = {"available": True, **forecast_next_month(monthly)}
+    except ValueError as error:
+        forecast = {"available": False, "reason": str(error)}
+    return {
+        "months": _records(monthly),
+        "undated_rows": undated,
+        "forecast": forecast,
+    }
